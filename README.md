@@ -62,6 +62,18 @@ The system can easily run on a computer with a webcam and does not require speci
 - VS Code
 - OpenCV library
 
+## Project Structure
+- `main.py` (runs the application)
+- `face_detection.py` (handles face detection)
+- `emotion_model.py` (handles emotion prediction)
+
+## How to Run
+1. Install dependencies:
+   - `pip install -r requirements.txt`
+2. Start the real-time system:
+   - `python main.py`
+3. Press `q` to close the webcam window.
+
 ## Conclusion
 Student Emotion Detection systems play an important role in improving modern education by analyzing student engagement and emotional responses during learning sessions.
 
