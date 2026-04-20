@@ -69,7 +69,7 @@ The system can easily run on a computer with a webcam and does not require speci
 
 ## How to Run
 1. Open a terminal in the project folder:
-   - `cd /home/runner/work/Emotionn-detection-System/Emotionn-detection-System`
+   - `cd path/to/Emotionn-detection-System`
 2. (Recommended) Create and activate a virtual environment:
    - Linux/macOS:
      - `python3 -m venv .venv`

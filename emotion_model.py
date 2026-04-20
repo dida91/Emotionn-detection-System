@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from fer import FER
 
-SUPPORTED_LABELS = {
+SUPPORTED_LABELS = (
     "happy",
     "sad",
     "angry",
@@ -10,7 +10,7 @@ SUPPORTED_LABELS = {
     "neutral",
     "fear",
     "disgust",
-}
+)
 
 LABEL_MAP = {
     "surprise": "surprised",
@@ -35,10 +35,9 @@ class EmotionModel:
                 if mapped_label in scores:
                     scores[mapped_label] = float(value or 0.0)
 
-        dominant_label = max(scores, key=scores.get)
-        dominant_score = float(scores[dominant_label])
-
-        if dominant_score <= 0.0:
+        if all(score <= 0.0 for score in scores.values()):
             return "neutral", 0.0, scores
 
+        dominant_label = max(scores, key=scores.get)
+        dominant_score = float(scores[dominant_label])
         return dominant_label, dominant_score, scores
