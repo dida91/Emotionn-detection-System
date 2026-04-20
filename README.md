@@ -68,11 +68,26 @@ The system can easily run on a computer with a webcam and does not require speci
 - `emotion_model.py` (handles emotion prediction)
 
 ## How to Run
-1. Install dependencies:
+1. Open a terminal in the project folder:
+   - `cd path/to/Emotionn-detection-System`
+2. (Recommended) Create and activate a virtual environment:
+   - Linux/macOS:
+     - `python3 -m venv .venv`
+     - `source .venv/bin/activate`
+   - Windows (PowerShell):
+     - `python -m venv .venv`
+     - `.venv\Scripts\Activate.ps1`
+3. Install dependencies:
    - `pip install -r requirements.txt`
-2. Start the real-time system:
+4. Start the real-time system:
    - `python main.py`
-3. Press `q` to close the webcam window.
+5. If your webcam is not detected, try another camera index:
+   - `python main.py --camera-index 1`
+6. Press `q` to close the webcam window.
+
+### Output
+- The first label above the face is the **top emotion** with confidence.
+- The second label shows **all emotion scores** (`happy`, `sad`, `angry`, `surprised`, `fear`, `disgust`, `neutral`).
 
 ## Conclusion
 Student Emotion Detection systems play an important role in improving modern education by analyzing student engagement and emotional responses during learning sessions.
