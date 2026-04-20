@@ -5,7 +5,7 @@ import cv2
 from emotion_model import EmotionModel
 from face_detection import FaceDetector
 
-MIN_LABEL_Y = 20
+LABEL_MIN_Y_POSITION = 20
 
 
 def run(camera_index: int = 0) -> None:
@@ -24,6 +24,7 @@ def run(camera_index: int = 0) -> None:
 
             faces = face_detector.detect_faces(frame)
             for (x, y, w, h) in faces:
+                # Guard against occasional boundary overflow on partial edge detections.
                 x0 = max(0, x)
                 y0 = max(0, y)
                 x1 = min(frame.shape[1], x + w)
@@ -40,7 +41,7 @@ def run(camera_index: int = 0) -> None:
                 cv2.putText(
                     frame,
                     label,
-                    (x0, max(MIN_LABEL_Y, y0 - 10)),
+                    (x0, max(LABEL_MIN_Y_POSITION, y0 - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
                     (0, 255, 0),
@@ -48,7 +49,7 @@ def run(camera_index: int = 0) -> None:
                 )
 
             cv2.imshow("Student Emotion Detection", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if cv2.waitKey(1) == ord("q"):
                 break
     finally:
         capture.release()

@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 from fer import FER
 
 SUPPORTED_LABELS = {
@@ -20,7 +21,9 @@ class EmotionModel:
     def __init__(self) -> None:
         self.detector = FER(mtcnn=False)
 
-    def predict_emotion(self, face_image):
+    def predict_emotion(self, face_image: np.ndarray) -> tuple[str, float]:
+        """Predict emotion from a single BGR face crop and return label/confidence."""
+        # FER2013-based emotion models are trained on 48x48 facial inputs.
         resized_face = cv2.resize(face_image, (48, 48))
         rgb_face = cv2.cvtColor(resized_face, cv2.COLOR_BGR2RGB)
         prediction = self.detector.top_emotion(rgb_face)

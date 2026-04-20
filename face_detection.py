@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 
 
 class FaceDetector:
@@ -6,7 +7,8 @@ class FaceDetector:
         classifier_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         self.face_cascade = cv2.CascadeClassifier(classifier_path)
 
-    def detect_faces(self, frame):
+    def detect_faces(self, frame: np.ndarray) -> np.ndarray:
+        """Detect faces in a BGR frame and return OpenCV face rectangles."""
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return self.face_cascade.detectMultiScale(
             gray_frame,
