@@ -3,6 +3,8 @@ import argparse
 import cv2
 from fer import FER
 
+MIN_LABEL_Y = 20
+
 
 def run_emotion_detection(camera_index: int = 0) -> None:
     detector = FER(mtcnn=True)
@@ -34,7 +36,7 @@ def run_emotion_detection(camera_index: int = 0) -> None:
                 cv2.putText(
                     frame,
                     label,
-                    (x, max(20, y - 10)),
+                    (x, max(MIN_LABEL_Y, y - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
                     (0, 255, 0),

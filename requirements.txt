@@ -1,4 +1,4 @@
-opencv-python
-tensorflow
-numpy
-fer
+opencv-python==4.10.0
+tensorflow==2.16.1
+numpy==1.26.4
+fer==22.5.1
