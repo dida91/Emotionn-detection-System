@@ -108,15 +108,13 @@ Set a PostgreSQL connection URL:
 - Windows (PowerShell):
   - `$env:DATABASE_URL='postgresql+psycopg2://postgres:postgres@localhost:5432/emotion_detection'`
 
-### 2) Optional teacher credentials
-Default credentials are created automatically on first run:
-- username: `teacher`
-- password: `teacher123`
-
-Override with environment variables:
+### 2) Teacher credentials
+Set teacher credentials with environment variables before starting the dashboard:
 - `TEACHER_USERNAME`
 - `TEACHER_PASSWORD`
 - `SECRET_KEY`
+
+If `TEACHER_USERNAME` is not provided, it defaults to `teacher`.
 
 ### 3) Run dashboard
 - `python app.py`

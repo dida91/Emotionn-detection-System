@@ -58,7 +58,9 @@ class EmotionRecord(db.Model):
     dominant_emotion = db.Column(db.String(32), nullable=False)
     confidence = db.Column(db.Float, nullable=False)
     emotion_scores = db.Column(db.JSON, nullable=False)
-    analyzed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    analyzed_at = db.Column(
+        db.DateTime, nullable=False, default=lambda: datetime.utcnow()
+    )
 
 
 face_detector = FaceDetector()
@@ -70,13 +72,7 @@ def _ensure_default_teacher() -> None:
     username = os.environ.get("TEACHER_USERNAME", "teacher")
     password = os.environ.get("TEACHER_PASSWORD")
     if not password:
-        if os.environ.get("FLASK_ENV") == "production":
-            raise RuntimeError("TEACHER_PASSWORD must be set in production.")
-        password = secrets.token_urlsafe(18)
-        print(
-            "Generated development teacher password (set TEACHER_PASSWORD to override): "
-            f"{password}"
-        )
+        raise RuntimeError("TEACHER_PASSWORD must be set before starting the app.")
 
     teacher = Teacher.query.filter_by(username=username).first()
     if teacher is None:
