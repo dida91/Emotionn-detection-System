@@ -28,8 +28,9 @@ ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 VIDEO_FRAME_STEP = 10
 
 app = Flask(__name__)
+app_env = os.environ.get("APP_ENV", "development").lower()
 secret_key = os.environ.get("SECRET_KEY")
-if not secret_key and os.environ.get("FLASK_ENV") == "production":
+if not secret_key and app_env == "production":
     raise RuntimeError("SECRET_KEY must be set in production.")
 app.config["SECRET_KEY"] = secret_key or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
@@ -76,6 +77,8 @@ def _ensure_default_teacher() -> None:
     password = os.environ.get("TEACHER_PASSWORD")
     if not password:
         raise RuntimeError("TEACHER_PASSWORD must be set before starting the app.")
+    if len(password) < 12:
+        raise RuntimeError("TEACHER_PASSWORD must be at least 12 characters long.")
 
     teacher = Teacher.query.filter_by(username=username).first()
     if teacher is None:
@@ -314,6 +317,9 @@ def dashboard():
             else:
                 flash("Unsupported file type. Upload image or video.", "error")
                 return redirect(url_for("dashboard"))
+        except ValueError as exc:
+            flash(f"Analysis failed: {exc}", "error")
+            return redirect(url_for("dashboard"))
         except Exception as exc:
             app.logger.exception("Media analysis failed: %s", exc)
             flash(

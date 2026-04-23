@@ -27,7 +27,8 @@
     <h2>Upload Student Image or Video</h2>
     <form method="post" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <input type="file" name="media" required />
+      <label for="media">Select image or video</label>
+      <input type="file" id="media" name="media" required />
       <button type="submit">Analyze Emotion</button>
     </form>
 
