@@ -1,4 +1,6 @@
+import hmac
 import os
+import secrets
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +27,10 @@ ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "bmp"}
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-me-in-production")
+secret_key = os.environ.get("SECRET_KEY")
+if not secret_key and os.environ.get("FLASK_ENV") == "production":
+    raise RuntimeError("SECRET_KEY must be set in production.")
+app.config["SECRET_KEY"] = secret_key or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL",
     "postgresql+psycopg2://postgres:postgres@localhost:5432/emotion_detection",
@@ -63,7 +68,15 @@ emotion_model = EmotionModel()
 
 def _ensure_default_teacher() -> None:
     username = os.environ.get("TEACHER_USERNAME", "teacher")
-    password = os.environ.get("TEACHER_PASSWORD", "teacher123")
+    password = os.environ.get("TEACHER_PASSWORD")
+    if not password:
+        if os.environ.get("FLASK_ENV") == "production":
+            raise RuntimeError("TEACHER_PASSWORD must be set in production.")
+        password = secrets.token_urlsafe(18)
+        print(
+            "Generated development teacher password (set TEACHER_PASSWORD to override): "
+            f"{password}"
+        )
 
     teacher = Teacher.query.filter_by(username=username).first()
     if teacher is None:
@@ -78,9 +91,23 @@ with app.app_context():
     _ensure_default_teacher()
 
 
+def _csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        session["csrf_token"] = token
+    return token
 
-def _is_allowed_file(filename: str, extensions: set[str]) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in extensions
+
+@app.context_processor
+def csrf_context():
+    return {"csrf_token": _csrf_token()}
+
+
+def _validate_csrf() -> bool:
+    submitted = request.form.get("csrf_token", "")
+    expected = session.get("csrf_token", "")
+    return bool(submitted and expected and hmac.compare_digest(submitted, expected))
 
 
 
@@ -211,13 +238,13 @@ def _analyze_video(video_path: str) -> tuple[str, float, dict[str, float]]:
 
 
 
-def _require_login() -> bool:
+def _is_logged_in() -> bool:
     return "teacher_id" in session
 
 
 @app.route("/", methods=["GET"])
 def index():
-    if _require_login():
+    if _is_logged_in():
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
@@ -225,6 +252,10 @@ def index():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
+        if not _validate_csrf():
+            flash("Invalid session token. Please try again.", "error")
+            return redirect(url_for("login"))
+
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
@@ -241,16 +272,23 @@ def login():
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    if not _validate_csrf():
+        flash("Invalid session token. Please try again.", "error")
+        return redirect(url_for("dashboard"))
     session.clear()
     return redirect(url_for("login"))
 
 
 @app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
-    if not _require_login():
+    if not _is_logged_in():
         return redirect(url_for("login"))
 
     if request.method == "POST":
+        if not _validate_csrf():
+            flash("Invalid session token. Please try again.", "error")
+            return redirect(url_for("dashboard"))
+
         uploaded_file = request.files.get("media")
         if uploaded_file is None or uploaded_file.filename == "":
             flash("Please upload an image or video file.", "error")
@@ -306,4 +344,4 @@ def dashboard():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1")

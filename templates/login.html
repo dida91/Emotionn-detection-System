@@ -19,11 +19,12 @@
     {% endwith %}
 
     <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <label for="username">Username</label>
-      <input type="text" id="username" name="username" required />
+      <input type="text" id="username" name="username" autocomplete="username" required />
 
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" required />
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
 
       <button type="submit">Login</button>
     </form>
