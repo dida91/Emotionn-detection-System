@@ -95,3 +95,34 @@ Student Emotion Detection systems play an important role in improving modern edu
 By using computer vision and machine learning techniques, the system can automatically detect student emotions from facial expressions. This technology helps educators understand student behavior, improve teaching methods, and enhance the overall learning experience.
 
 With further improvements, emotion detection systems can be integrated into online learning platforms, smart classrooms, and educational analytics systems.
+
+## Web Dashboard (Teacher Login + PostgreSQL)
+
+This project now includes a Flask dashboard where a **teacher logs in**, uploads a **student image or video**, and views stored emotion analysis history.
+
+### 1) Configure PostgreSQL
+Set a PostgreSQL connection URL:
+
+- Linux/macOS:
+  - `export DATABASE_URL='postgresql+psycopg2://postgres:postgres@localhost:5432/emotion_detection'`
+- Windows (PowerShell):
+  - `$env:DATABASE_URL='postgresql+psycopg2://postgres:postgres@localhost:5432/emotion_detection'`
+
+### 2) Optional teacher credentials
+Default credentials are created automatically on first run:
+- username: `teacher`
+- password: `teacher123`
+
+Override with environment variables:
+- `TEACHER_USERNAME`
+- `TEACHER_PASSWORD`
+- `SECRET_KEY`
+
+### 3) Run dashboard
+- `python app.py`
+- Open `http://127.0.0.1:5000`
+
+### 4) Teacher workflow
+1. Login using teacher credentials.
+2. Upload a student **image** (`jpg`, `jpeg`, `png`, `bmp`) or **video** (`mp4`, `avi`, `mov`, `mkv`).
+3. View dominant emotion, confidence, and full emotion scores on the dashboard history.

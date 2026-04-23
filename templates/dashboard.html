@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teacher Dashboard</title>
+  </head>
+  <body>
+    <h1>Teacher Dashboard</h1>
+    <p>Welcome, {{ username }}</p>
+
+    <form method="post" action="{{ url_for('logout') }}">
+      <button type="submit">Logout</button>
+    </form>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul>
+          {% for category, message in messages %}
+            <li><strong>{{ category }}:</strong> {{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <h2>Upload Student Image or Video</h2>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="media" required />
+      <button type="submit">Analyze Emotion</button>
+    </form>
+
+    <h2>Analysis History</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>File</th>
+          <th>Type</th>
+          <th>Top Emotion</th>
+          <th>Confidence</th>
+          <th>Scores</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in records %}
+          <tr>
+            <td>{{ row.analyzed_at }}</td>
+            <td>{{ row.source_filename }}</td>
+            <td>{{ row.media_type }}</td>
+            <td>{{ row.dominant_emotion }}</td>
+            <td>{{ '%.2f'|format(row.confidence) }}</td>
+            <td>
+              {% for key, value in row.emotion_scores.items() %}
+                {{ key }}: {{ '%.2f'|format(value) }}{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6">No records yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>
