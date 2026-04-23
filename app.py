@@ -32,6 +32,8 @@ app_env = os.environ.get("APP_ENV", "development").lower()
 secret_key = os.environ.get("SECRET_KEY")
 if not secret_key and app_env == "production":
     raise RuntimeError("SECRET_KEY must be set in production.")
+if secret_key and app_env == "production" and len(secret_key) < 32:
+    raise RuntimeError("SECRET_KEY must be at least 32 characters in production.")
 app.config["SECRET_KEY"] = secret_key or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL",
@@ -304,15 +306,18 @@ def dashboard():
                 dominant, confidence, scores = _analyze_image(uploaded_file.read())
                 media_type = "image"
             elif extension in ALLOWED_VIDEO_EXTENSIONS:
-                # Keep file on disk temporarily so OpenCV can open it by path.
-                with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as tmp:
-                    temp_path = tmp.name
-                    uploaded_file.save(temp_path)
+                temp_path = ""
                 try:
+                    # Keep file on disk temporarily so OpenCV can open it by path.
+                    with tempfile.NamedTemporaryFile(
+                        suffix=f".{extension}", delete=False
+                    ) as tmp:
+                        temp_path = tmp.name
+                    uploaded_file.save(temp_path)
                     dominant, confidence, scores = _analyze_video(temp_path)
                     media_type = "video"
                 finally:
-                    if os.path.exists(temp_path):
+                    if temp_path and os.path.exists(temp_path):
                         os.remove(temp_path)
             else:
                 flash("Unsupported file type. Upload image or video.", "error")

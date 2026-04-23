@@ -28,7 +28,7 @@
     <form method="post" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <label for="media">Select image or video</label>
-      <input type="file" id="media" name="media" required />
+      <input type="file" id="media" name="media" accept="image/jpeg,image/png,image/bmp,video/mp4,video/x-msvideo,video/quicktime,video/x-matroska" required />
       <button type="submit">Analyze Emotion</button>
     </form>
 
