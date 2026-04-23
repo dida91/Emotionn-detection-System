@@ -20,7 +20,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from emotion_model import EmotionModel
+from emotion_model import EmotionModel, SUPPORTED_LABELS
 from face_detection import FaceDetector
 
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "bmp"}
@@ -127,10 +127,12 @@ def _aggregate_scores(frames_scores: list[dict[str, float]]) -> dict[str, float]
             "neutral": 1.0,
         }
 
-    labels = frames_scores[0].keys()
+    labels = SUPPORTED_LABELS
     output = {}
     for label in labels:
-        output[label] = sum(score[label] for score in frames_scores) / len(frames_scores)
+        output[label] = (
+            sum(float(score.get(label, 0.0)) for score in frames_scores) / len(frames_scores)
+        )
     return output
 
 
@@ -313,7 +315,7 @@ def dashboard():
                         suffix=f".{extension}", delete=False
                     ) as tmp:
                         temp_path = tmp.name
-                    uploaded_file.save(temp_path)
+                        uploaded_file.save(tmp.name)
                     dominant, confidence, scores = _analyze_video(temp_path)
                     media_type = "video"
                 finally:
