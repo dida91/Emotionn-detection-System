@@ -2,7 +2,7 @@ import hmac
 import os
 import secrets
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
@@ -25,6 +25,7 @@ from face_detection import FaceDetector
 
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "bmp"}
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
+VIDEO_FRAME_STEP = 10
 
 app = Flask(__name__)
 secret_key = os.environ.get("SECRET_KEY")
@@ -59,7 +60,9 @@ class EmotionRecord(db.Model):
     confidence = db.Column(db.Float, nullable=False)
     emotion_scores = db.Column(db.JSON, nullable=False)
     analyzed_at = db.Column(
-        db.DateTime, nullable=False, default=lambda: datetime.utcnow()
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -185,7 +188,7 @@ def _analyze_video(video_path: str) -> tuple[str, float, dict[str, float]]:
         raise ValueError("Unable to open video file.")
 
     frame_index = 0
-    frame_step = 10
+    frame_step = VIDEO_FRAME_STEP
     frame_scores = []
     best_emotion = "neutral"
     best_confidence = 0.0
@@ -298,6 +301,7 @@ def dashboard():
                 dominant, confidence, scores = _analyze_image(uploaded_file.read())
                 media_type = "image"
             elif extension in ALLOWED_VIDEO_EXTENSIONS:
+                # Keep file on disk temporarily so OpenCV can open it by path.
                 with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as tmp:
                     temp_path = tmp.name
                     uploaded_file.save(temp_path)
@@ -311,7 +315,11 @@ def dashboard():
                 flash("Unsupported file type. Upload image or video.", "error")
                 return redirect(url_for("dashboard"))
         except Exception as exc:
-            flash(f"Analysis failed: {exc}", "error")
+            app.logger.exception("Media analysis failed: %s", exc)
+            flash(
+                "Analysis failed. Please check the file and try again.",
+                "error",
+            )
             return redirect(url_for("dashboard"))
 
         record = EmotionRecord(
