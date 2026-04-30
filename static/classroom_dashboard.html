@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Classroom Monitoring Dashboard</title>
+  <style>
+    /* ---------------------------------------------------------------
+       Reset & base
+    --------------------------------------------------------------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0f1117;
+      --surface:      #1a1d27;
+      --surface2:     #222535;
+      --border:       #2e3250;
+      --text:         #e8eaf6;
+      --text-muted:   #8a8fb5;
+      --green:        #2ecc71;
+      --orange:       #f39c12;
+      --red:          #e74c3c;
+      --blue:         #3498db;
+      --yellow:       #f1c40f;
+      --purple:       #9b59b6;
+      --alert-red:    #c0392b;
+      --alert-yellow: #d4ac0d;
+      --radius:       10px;
+      --shadow:       0 2px 16px rgba(0,0,0,.45);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ---------------------------------------------------------------
+       Header
+    --------------------------------------------------------------- */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: .5px;
+    }
+    header h1 span { color: var(--blue); }
+
+    #ws-status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: .82rem;
+      color: var(--text-muted);
+    }
+    #ws-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background .4s;
+    }
+    #ws-dot.connected { background: var(--green); }
+
+    /* ---------------------------------------------------------------
+       Summary bar
+    --------------------------------------------------------------- */
+    #summary-bar {
+      display: flex;
+      gap: 16px;
+      padding: 12px 28px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      font-size: .85rem;
+      flex-wrap: wrap;
+    }
+    .summary-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+    .chip-present  { background: rgba(46,204,113,.15); color: var(--green); }
+    .chip-away     { background: rgba(243,156,18,.15);  color: var(--orange); }
+    .chip-absent   { background: rgba(142,150,181,.1);  color: var(--text-muted); }
+    .chip-alert    { background: rgba(231,76,60,.15);   color: var(--red); }
+
+    /* ---------------------------------------------------------------
+       Main layout
+    --------------------------------------------------------------- */
+    main {
+      padding: 24px 28px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .section-title {
+      font-size: .78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+
+    /* ---------------------------------------------------------------
+       Student grid
+    --------------------------------------------------------------- */
+    #student-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .student-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 16px 14px;
+      position: relative;
+      transition: transform .15s, box-shadow .15s;
+      overflow: hidden;
+    }
+    .student-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+
+    /* Coloured left-edge accent */
+    .student-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 4px;
+      border-radius: var(--radius) 0 0 var(--radius);
+      background: var(--border);
+      transition: background .3s;
+    }
+    .student-card.present::before  { background: var(--green); }
+    .student-card.away::before     { background: var(--orange); }
+    .student-card.absent::before   { background: var(--text-muted); }
+    .student-card.alert-distress::before { background: var(--alert-red); }
+    .student-card.alert-engagement::before { background: var(--alert-yellow); }
+
+    .student-name {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      padding-left: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding-left: 8px;
+    }
+    .status-badge {
+      font-size: .72rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 12px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+    }
+    .status-present { background: rgba(46,204,113,.2);  color: var(--green); }
+    .status-away    { background: rgba(243,156,18,.2);   color: var(--orange); }
+    .status-absent  { background: rgba(142,150,181,.15); color: var(--text-muted); }
+
+    .emotion-display {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-left: 8px;
+      margin-bottom: 10px;
+    }
+    .emotion-emoji { font-size: 1.6rem; line-height: 1; }
+    .emotion-label { font-size: .85rem; color: var(--text-muted); text-transform: capitalize; }
+
+    .head-pose-label {
+      font-size: .72rem;
+      color: var(--text-muted);
+      padding-left: 8px;
+      margin-bottom: 10px;
+    }
+    .head-pose-label span { color: var(--text); font-weight: 600; }
+
+    /* Alert banner */
+    .alert-banner {
+      display: none;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: .78rem;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+    .alert-banner.visible { display: flex; }
+    .alert-distress-banner  { background: rgba(192,57,43,.25);  color: #e87a6f; border: 1px solid rgba(192,57,43,.4); }
+    .alert-engagement-banner{ background: rgba(212,172,13,.2);  color: #e8c93e; border: 1px solid rgba(212,172,13,.35); }
+
+    .last-seen {
+      font-size: .68rem;
+      color: var(--text-muted);
+      padding-left: 8px;
+      margin-top: 6px;
+    }
+
+    /* ---------------------------------------------------------------
+       Enrolment panel
+    --------------------------------------------------------------- */
+    #enroll-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      max-width: 520px;
+    }
+
+    .enroll-controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+      align-items: flex-end;
+    }
+
+    label.field-label {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: .82rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    input[type="text"] {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: .9rem;
+      outline: none;
+      transition: border-color .2s;
+      width: 200px;
+    }
+    input[type="text"]:focus { border-color: var(--blue); }
+
+    button {
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 9px 18px;
+      font-size: .88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    button:hover:not(:disabled) { opacity: .88; transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.btn-secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+    button.btn-danger     { background: var(--red); }
+
+    #enroll-video-container {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    #enroll-video-container.visible { display: flex; }
+
+    #enroll-video {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 6px;
+      background: #000;
+      transform: scaleX(-1); /* mirror for natural feel */
+    }
+
+    #enroll-canvas { display: none; }
+
+    #enroll-status {
+      font-size: .82rem;
+      min-height: 20px;
+    }
+    .status-ok  { color: var(--green); }
+    .status-err { color: var(--red); }
+
+    /* ---------------------------------------------------------------
+       Empty state
+    --------------------------------------------------------------- */
+    #empty-state {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    #empty-state.visible { display: flex; }
+    #empty-state .big-icon { font-size: 3rem; }
+    #empty-state p { font-size: .95rem; max-width: 360px; }
+  </style>
+</head>
+<body>
+
+<!-- ------------------------------------------------------------------ Header -->
+<header>
+  <h1>🎓 Classroom <span>Monitor</span></h1>
+  <div id="ws-status">
+    <div id="ws-dot"></div>
+    <span id="ws-label">Connecting…</span>
+  </div>
+</header>
+
+<!-- ------------------------------------------------------------------ Summary -->
+<div id="summary-bar">
+  <div class="summary-chip chip-present">🟢 Present: <span id="count-present">0</span></div>
+  <div class="summary-chip chip-away">🟠 Away: <span id="count-away">0</span></div>
+  <div class="summary-chip chip-absent">⚫ Absent: <span id="count-absent">0</span></div>
+  <div class="summary-chip chip-alert">🔴 Alerts: <span id="count-alert">0</span></div>
+</div>
+
+<main>
+
+  <!-- ---------------------------------------------------------------- Student grid -->
+  <p class="section-title">Live Student Status</p>
+
+  <div id="empty-state" class="visible">
+    <div class="big-icon">📷</div>
+    <p>No enrolled students yet. Use the panel below to enrol your first student, then start the video processor.</p>
+  </div>
+
+  <div id="student-grid"></div>
+
+  <!-- ---------------------------------------------------------------- Enrolment -->
+  <p class="section-title">Enrol New Student</p>
+
+  <div id="enroll-section">
+    <div class="enroll-controls">
+      <label class="field-label">
+        Student name
+        <input type="text" id="enroll-name" placeholder="e.g. Alice" maxlength="80" />
+      </label>
+      <button id="btn-open-camera">📷 Open Camera</button>
+    </div>
+
+    <div id="enroll-video-container">
+      <video id="enroll-video" autoplay playsinline></video>
+      <canvas id="enroll-canvas"></canvas>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button id="btn-capture">📸 Capture &amp; Enrol</button>
+        <button class="btn-secondary" id="btn-close-camera">✕ Close Camera</button>
+      </div>
+    </div>
+
+    <p id="enroll-status"></p>
+  </div>
+
+</main>
+
+<script>
+/* ====================================================================
+   Utilities
+==================================================================== */
+const EMOTION_EMOJI = {
+  happy:     '😊',
+  sad:       '😢',
+  angry:     '😠',
+  neutral:   '😐',
+  surprised: '😲',
+  fear:      '😨',
+  disgust:   '🤢',
+};
+
+const HEAD_POSE_LABEL = {
+  forward: '● Facing forward',
+  left:    '← Looking left',
+  right:   '→ Looking right',
+  down:    '↓ Looking down',
+};
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
+/* ====================================================================
+   State
+==================================================================== */
+// students: { [name]: { emotion, head_pose, attendance_status, is_present,
+//                        active_alert, last_seen } }
+const students = {};
+
+/* ====================================================================
+   DOM helpers
+==================================================================== */
+function getOrCreateCard(name) {
+  let card = document.getElementById(`card-${CSS.escape(name)}`);
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'student-card absent';
+    card.id = `card-${name}`;
+    card.innerHTML = `
+      <div class="student-name" title="${name}">${name}</div>
+      <div class="status-row">
+        <span class="status-badge status-absent">Absent</span>
+      </div>
+      <div class="emotion-display">
+        <span class="emotion-emoji">😐</span>
+        <span class="emotion-label">neutral</span>
+      </div>
+      <div class="head-pose-label">Pose: <span>—</span></div>
+      <div class="alert-banner alert-distress-banner">🚨 Emotional Distress</div>
+      <div class="alert-banner alert-engagement-banner">⚠️ Low Engagement</div>
+      <div class="last-seen">Last seen: <span>—</span></div>
+    `;
+    document.getElementById('student-grid').appendChild(card);
+    document.getElementById('empty-state').classList.remove('visible');
+  }
+  return card;
+}
+
+function updateCard(name, data) {
+  const card = getOrCreateCard(name);
+
+  const status = (data.attendance_status || 'Absent').toLowerCase();
+  const emotion = (data.emotion || 'neutral').toLowerCase();
+  const pose = (data.head_pose || 'forward').toLowerCase();
+  const alert = data.active_alert || null;
+
+  // Border accent class
+  card.className = 'student-card';
+  if (alert === 'Emotional Distress') {
+    card.classList.add('alert-distress');
+  } else if (alert === 'Low Engagement') {
+    card.classList.add('alert-engagement');
+  } else {
+    card.classList.add(status === 'present' ? 'present' : status === 'away' ? 'away' : 'absent');
+  }
+
+  // Status badge
+  const badge = card.querySelector('.status-badge');
+  badge.className = `status-badge status-${status}`;
+  badge.textContent = data.attendance_status || 'Absent';
+
+  // Emotion
+  card.querySelector('.emotion-emoji').textContent = EMOTION_EMOJI[emotion] || '😐';
+  card.querySelector('.emotion-label').textContent = emotion;
+
+  // Head pose
+  card.querySelector('.head-pose-label span').textContent = HEAD_POSE_LABEL[pose] || pose;
+
+  // Alert banners
+  const distressBanner   = card.querySelector('.alert-distress-banner');
+  const engageBanner     = card.querySelector('.alert-engagement-banner');
+  distressBanner.classList.toggle('visible', alert === 'Emotional Distress');
+  engageBanner.classList.toggle('visible',   alert === 'Low Engagement');
+
+  // Last seen
+  card.querySelector('.last-seen span').textContent = fmtTime(data.last_seen || data.timestamp);
+}
+
+function refreshSummary() {
+  let present = 0, away = 0, absent = 0, alerts = 0;
+  for (const s of Object.values(students)) {
+    if (s.attendance_status === 'Present') present++;
+    else if (s.attendance_status === 'Away') away++;
+    else absent++;
+    if (s.active_alert) alerts++;
+  }
+  document.getElementById('count-present').textContent = present;
+  document.getElementById('count-away').textContent    = away;
+  document.getElementById('count-absent').textContent  = absent;
+  document.getElementById('count-alert').textContent   = alerts;
+}
+
+/* ====================================================================
+   Fetch initial snapshot
+==================================================================== */
+async function fetchInitialState() {
+  try {
+    const res = await fetch('/students');
+    if (!res.ok) return;
+    const list = await res.json();
+    for (const s of list) {
+      students[s.student_name] = s;
+      updateCard(s.student_name, s);
+    }
+    refreshSummary();
+  } catch (_) { /* ignore — WS will provide data */ }
+}
+
+/* ====================================================================
+   WebSocket connection
+==================================================================== */
+let ws = null;
+let wsRetryDelay = 1500;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard`);
+
+  ws.addEventListener('open', () => {
+    document.getElementById('ws-dot').classList.add('connected');
+    document.getElementById('ws-label').textContent = 'Connected';
+    wsRetryDelay = 1500;
+  });
+
+  ws.addEventListener('message', (ev) => {
+    let data;
+    try { data = JSON.parse(ev.data); } catch (_) { return; }
+
+    // Ignore enrollment-only events that carry no student state.
+    if (data.event === 'enrolled' && !data.attendance_status) {
+      // Just ensure the card exists.
+      getOrCreateCard(data.student_name);
+      return;
+    }
+
+    const name = data.student_name;
+    if (!name) return;
+
+    // Merge into local state.
+    students[name] = { ...(students[name] || {}), ...data };
+    updateCard(name, students[name]);
+    refreshSummary();
+  });
+
+  ws.addEventListener('close', () => {
+    document.getElementById('ws-dot').classList.remove('connected');
+    document.getElementById('ws-label').textContent = 'Reconnecting…';
+    setTimeout(connectWS, wsRetryDelay);
+    wsRetryDelay = Math.min(wsRetryDelay * 1.5, 15000);
+  });
+
+  ws.addEventListener('error', () => ws.close());
+}
+
+/* ====================================================================
+   Enrolment — camera capture
+==================================================================== */
+let cameraStream = null;
+
+const btnOpenCamera   = document.getElementById('btn-open-camera');
+const btnCloseCamera  = document.getElementById('btn-close-camera');
+const btnCapture      = document.getElementById('btn-capture');
+const videoContainer  = document.getElementById('enroll-video-container');
+const videoEl         = document.getElementById('enroll-video');
+const canvasEl        = document.getElementById('enroll-canvas');
+const statusEl        = document.getElementById('enroll-status');
+const nameInput       = document.getElementById('enroll-name');
+
+function setEnrollStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = type === 'ok' ? 'status-ok' : type === 'err' ? 'status-err' : '';
+}
+
+btnOpenCamera.addEventListener('click', async () => {
+  const name = nameInput.value.trim();
+  if (!name) { setEnrollStatus('Please enter a student name first.', 'err'); return; }
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    videoEl.srcObject = cameraStream;
+    videoContainer.classList.add('visible');
+    btnOpenCamera.disabled = true;
+    setEnrollStatus('Camera ready. Position the student's face and click Capture.', '');
+  } catch (e) {
+    setEnrollStatus(`Camera error: ${e.message}`, 'err');
+  }
+});
+
+btnCloseCamera.addEventListener('click', () => {
+  if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+  videoEl.srcObject = null;
+  videoContainer.classList.remove('visible');
+  btnOpenCamera.disabled = false;
+  setEnrollStatus('', '');
+});
+
+btnCapture.addEventListener('click', async () => {
+  const name = nameInput.value.trim();
+  if (!name) { setEnrollStatus('Student name is required.', 'err'); return; }
+  if (!cameraStream) { setEnrollStatus('Camera is not open.', 'err'); return; }
+
+  // Draw current video frame onto the hidden canvas.
+  canvasEl.width  = videoEl.videoWidth  || 640;
+  canvasEl.height = videoEl.videoHeight || 480;
+  const ctx = canvasEl.getContext('2d');
+  // Undo the CSS mirror so the image is not flipped for the backend.
+  ctx.translate(canvasEl.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(videoEl, 0, 0);
+
+  const dataURL = canvasEl.toDataURL('image/jpeg', 0.92);
+  // Strip the data-URL prefix to get raw base64.
+  const base64 = dataURL.split(',')[1];
+
+  btnCapture.disabled = true;
+  setEnrollStatus('Enrolling…', '');
+
+  try {
+    const res = await fetch('/enroll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_name: name, image_base64: base64 }),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      setEnrollStatus(`✅ ${json.message}  (${json.face_count} sample(s) stored)`, 'ok');
+      // Ensure a card exists for the new student.
+      if (!students[name]) {
+        students[name] = {
+          student_name: name,
+          emotion: 'neutral',
+          head_pose: 'forward',
+          attendance_status: 'Absent',
+          is_present: false,
+          active_alert: null,
+          last_seen: null,
+        };
+        updateCard(name, students[name]);
+        refreshSummary();
+      }
+    } else {
+      setEnrollStatus(`❌ ${json.detail || 'Enrolment failed.'}`, 'err');
+    }
+  } catch (e) {
+    setEnrollStatus(`❌ Network error: ${e.message}`, 'err');
+  } finally {
+    btnCapture.disabled = false;
+  }
+});
+
+/* ====================================================================
+   Boot
+==================================================================== */
+(async () => {
+  await fetchInitialState();
+  connectWS();
+})();
+</script>
+</body>
+</html>
