@@ -98,7 +98,7 @@ With further improvements, emotion detection systems can be integrated into onli
 
 ## Web Dashboard (Teacher Login + PostgreSQL)
 
-This project now includes a Flask dashboard where a **teacher logs in**, uploads a **student image or video**, and views stored emotion analysis history.
+This project includes a Flask dashboard where a **teacher logs in**, uploads a **student image or video**, and views stored emotion analysis history.
 
 ### 1) Configure PostgreSQL
 Set a PostgreSQL connection URL:
@@ -124,3 +124,66 @@ If `TEACHER_USERNAME` is not provided, it defaults to `teacher`.
 1. Login using teacher credentials.
 2. Upload a student **image** (`jpg`, `jpeg`, `png`, `bmp`) or **video** (`mp4`, `avi`, `mov`, `mkv`).
 3. View dominant emotion, confidence, and full emotion scores on the dashboard history.
+
+---
+
+## Real-Time Classroom Monitoring System (FastAPI + WebSocket)
+
+A second, fully independent system provides **live** per-student emotion and
+attendance monitoring with intelligent alerting.
+
+### Architecture
+
+| File | Role |
+|------|------|
+| `classroom_backend.py` | FastAPI server — enrolment, attendance state, alerts, WebSocket broadcast |
+| `video_processor.py` | Camera capture, face recognition, emotion detection, head-pose estimation |
+| `static/classroom_dashboard.html` | Teacher dashboard (served at `/`) |
+
+### Features
+
+- **Face recognition** — identifies each enrolled student in the live feed.
+- **Attendance tracking** — marks students Present on first detection; marks
+  them Away if unseen for **5 minutes**; reverts to Present when they return.
+- **Real-time emotion analysis** — per-student emotion streamed to the
+  dashboard via WebSocket.
+- **Head-pose estimation** — detects whether a student is looking left, right,
+  down, or forward using `solvePnP`.
+- **Intelligent alerts**
+  - 🚨 **Emotional Distress** — triggered when a student shows `sad` or
+    `angry` continuously for **10 minutes**.
+  - ⚠️ **Low Engagement** — triggered when a student looks away from the
+    camera AND shows `neutral` emotion for **2 minutes**.
+- **Enrolment UI** — teachers capture webcam frames directly from the
+  dashboard to register new students; no command-line steps required.
+
+### Quick start
+
+#### 1. Install dependencies (requires cmake for dlib/face-recognition)
+```bash
+pip install -r requirements.txt
+```
+
+#### 2. Start the backend
+```bash
+python classroom_backend.py
+# Listening on http://0.0.0.0:8000
+```
+
+#### 3. Open the dashboard
+Navigate to `http://localhost:8000` in your browser.
+
+#### 4. Enrol students
+1. Type a student's name in the **Enrol New Student** panel.
+2. Click **Open Camera** and position the student's face.
+3. Click **Capture & Enrol** (repeat with different angles for better accuracy).
+
+#### 5. Start the video processor
+```bash
+python video_processor.py
+# Optional flags:
+#   --camera-index 1        (use a different webcam)
+#   --backend-url http://...  (remote backend)
+```
+
+The dashboard updates in real-time as soon as the processor detects faces.
