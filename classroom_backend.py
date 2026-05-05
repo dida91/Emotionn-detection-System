@@ -78,6 +78,8 @@ DISTRESS_THRESHOLD_SECONDS = 20 * 60   # 20 minutes
 ENGAGEMENT_THRESHOLD_SECONDS = 2 * 60  # 2 minutes
 
 # Keep up to this much emotion/pose history per student.
+# Must be at least as large as DISTRESS_THRESHOLD_SECONDS so that alert
+# evaluation always has enough data when the threshold is reached.
 HISTORY_WINDOW_SECONDS = 25 * 60       # 25 minutes
 
 # Emotions that can trigger the Emotional Distress alert.
@@ -655,7 +657,7 @@ async def get_attendance(
         try:
             filter_date = date_cls.fromisoformat(date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+            raise HTTPException(status_code=400, detail=f"Invalid date format \"{date}\". Use YYYY-MM-DD.")
 
     loop = asyncio.get_event_loop()
     records = await loop.run_in_executor(None, partial(_db_get_attendance, filter_date))
