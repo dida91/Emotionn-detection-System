@@ -579,6 +579,100 @@
     }
     .status-ok  { color: var(--green); }
     .status-err { color: var(--red); }
+    /* ── Attendance Modal ────────────────────────────────────────────────── */
+    #attendance-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    #attendance-overlay.visible { display: flex; }
+
+    #attendance-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      width: min(92vw, 820px);
+      max-height: 88vh;
+      overflow-y: auto;
+      box-shadow: 0 8px 40px rgba(0,0,0,.6);
+    }
+    #attendance-modal h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .attendance-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .attendance-toolbar label {
+      font-size: .82rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    #attendance-date-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: .85rem;
+      cursor: pointer;
+    }
+    #btn-load-attendance {
+      padding: 7px 14px;
+      font-size: .82rem;
+    }
+    #btn-close-attendance {
+      margin-left: auto;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: .82rem;
+      cursor: pointer;
+    }
+    #btn-close-attendance:hover { border-color: var(--red); color: var(--red); }
+
+    #attendance-table-wrap { overflow-x: auto; }
+    #attendance-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .84rem;
+    }
+    #attendance-table th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+    #attendance-table td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(46,50,80,.5);
+    }
+    #attendance-table tr:last-child td { border-bottom: none; }
+    .att-status-present { color: var(--green);      font-weight: 700; }
+    .att-status-away    { color: var(--orange);     font-weight: 700; }
+    .att-status-absent  { color: var(--text-muted); font-weight: 700; }
+    #attendance-empty {
+      padding: 24px;
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -599,10 +693,41 @@
   </div>
 
   <div class="header-right">
+    <button id="btn-attendance" class="btn-secondary" style="font-size:.8rem;padding:6px 12px;">📅 Attendance</button>
     <div class="teacher-chip">👤 <strong id="teacher-name">…</strong></div>
     <button id="btn-logout">Sign Out</button>
   </div>
 </header>
+
+<!-- ── Attendance Modal ──────────────────────────────────────────────────── -->
+<div id="attendance-overlay">
+  <div id="attendance-modal">
+    <h2>📅 Day-wise Attendance</h2>
+    <div class="attendance-toolbar">
+      <label for="attendance-date-select">Date:</label>
+      <select id="attendance-date-select"><option value="">Today</option></select>
+      <button id="btn-load-attendance">Load</button>
+      <button id="btn-close-attendance">✕ Close</button>
+    </div>
+    <div id="attendance-table-wrap">
+      <table id="attendance-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Student Name</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>First Seen</th>
+            <th>Last Seen</th>
+          </tr>
+        </thead>
+        <tbody id="attendance-tbody">
+          <tr><td colspan="6" id="attendance-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <!-- ── Alert Strip ───────────────────────────────────────────────────────── -->
 <div id="alert-strip">
@@ -1156,6 +1281,77 @@ document.getElementById('btn-remove-all').addEventListener('click', async () => 
   } catch (e) {
     alert(`Network error: ${e.message}`);
   }
+});
+
+/* ── Attendance Modal ──────────────────────────────────────────────────── */
+const attendanceOverlay = document.getElementById('attendance-overlay');
+const attendanceDateSel = document.getElementById('attendance-date-select');
+const attendanceTbody   = document.getElementById('attendance-tbody');
+
+function fmtAttTime(isoStr) {
+  if (!isoStr) return '—';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadAttendance(dateVal) {
+  attendanceTbody.innerHTML = '<tr><td colspan="6" id="attendance-empty">Loading…</td></tr>';
+  try {
+    const url = dateVal ? `/attendance?date=${encodeURIComponent(dateVal)}` : '/attendance';
+    const res = await fetch(url);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) { attendanceTbody.innerHTML = '<tr><td colspan="6">Failed to load data.</td></tr>'; return; }
+    const { records, available_dates } = await res.json();
+
+    // Rebuild the date selector
+    const selected = dateVal || '';
+    attendanceDateSel.innerHTML = '<option value="">Today</option>';
+    for (const d of available_dates) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      if (d === selected) opt.selected = true;
+      attendanceDateSel.appendChild(opt);
+    }
+
+    if (!records || records.length === 0) {
+      attendanceTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);font-style:italic;padding:20px;">No attendance records for this date.</td></tr>';
+      return;
+    }
+
+    attendanceTbody.innerHTML = records.map((r, i) => {
+      const statusClass = r.status === 'Present' ? 'att-status-present'
+                        : r.status === 'Away'    ? 'att-status-away'
+                        :                          'att-status-absent';
+      return `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${escapeHtml(r.student_name)}</strong></td>
+        <td>${r.date}</td>
+        <td class="${statusClass}">${r.status}</td>
+        <td>${fmtAttTime(r.first_seen)}</td>
+        <td>${fmtAttTime(r.last_seen)}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    attendanceTbody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+document.getElementById('btn-attendance').addEventListener('click', async () => {
+  attendanceOverlay.classList.add('visible');
+  await loadAttendance(attendanceDateSel.value);
+});
+
+document.getElementById('btn-close-attendance').addEventListener('click', () => {
+  attendanceOverlay.classList.remove('visible');
+});
+
+attendanceOverlay.addEventListener('click', e => {
+  if (e.target === attendanceOverlay) attendanceOverlay.classList.remove('visible');
+});
+
+document.getElementById('btn-load-attendance').addEventListener('click', () => {
+  loadAttendance(attendanceDateSel.value);
 });
 
 /* ── Boot ──────────────────────────────────────────────────────────────── */

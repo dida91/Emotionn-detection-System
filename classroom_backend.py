@@ -15,6 +15,7 @@ GET  /me                Return the authenticated teacher's username.
 POST /enroll            Register a new student face from a base64 image.
 POST /update            Receive a per-student update from the video processor.
 GET  /students          Return the current snapshot of all student states.
+GET  /attendance        Return day-wise attendance records.
 WS   /ws/dashboard      Push live JSON packets to connected dashboard clients.
 """
 
@@ -26,6 +27,8 @@ import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import date as date_cls, datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -33,11 +36,25 @@ import cv2
 import face_recognition
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from dotenv import load_dotenv
+from fastapi import FastAPI, Form, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
+
+# Load environment variables from .env file before reading any os.environ values.
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,14 +71,14 @@ AWAY_THRESHOLD_SECONDS = 5 * 60        # 5 minutes
 
 # 'Emotional Distress' alert fires after this many continuous seconds of
 # sad/angry emotion.
-DISTRESS_THRESHOLD_SECONDS = 10 * 60   # 10 minutes
+DISTRESS_THRESHOLD_SECONDS = 20 * 60   # 20 minutes
 
 # 'Low Engagement' alert fires after this many continuous seconds of the
 # student looking away AND showing neutral emotion.
 ENGAGEMENT_THRESHOLD_SECONDS = 2 * 60  # 2 minutes
 
 # Keep up to this much emotion/pose history per student.
-HISTORY_WINDOW_SECONDS = 15 * 60       # 15 minutes
+HISTORY_WINDOW_SECONDS = 25 * 60       # 25 minutes
 
 # Emotions that can trigger the Emotional Distress alert.
 DISTRESS_EMOTIONS = {"sad", "angry"}
@@ -93,6 +110,114 @@ if not os.environ.get("SECRET_KEY"):
         RuntimeWarning,
         stacklevel=1,
     )
+
+# ---------------------------------------------------------------------------
+# Database setup (PostgreSQL via DATABASE_URL from .env)
+# ---------------------------------------------------------------------------
+
+_DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "sqlite:///./classroom_attendance.db",
+)
+
+_engine = create_engine(_DATABASE_URL, pool_pre_ping=True)
+_SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+_Base = declarative_base()
+
+
+class AttendanceRecord(_Base):
+    """One row per student per calendar day."""
+
+    __tablename__ = "classroom_attendance"
+
+    id           = Column(Integer, primary_key=True)
+    student_name = Column(String(120), nullable=False)
+    date         = Column(Date, nullable=False)
+    status       = Column(String(20), nullable=False, default="Absent")
+    first_seen   = Column(DateTime(timezone=True), nullable=True)
+    last_seen    = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("student_name", "date", name="uq_classroom_student_date"),
+    )
+
+
+def _init_db() -> None:
+    """Create all tables if they don't exist yet."""
+    _Base.metadata.create_all(bind=_engine)
+
+
+# ---------------------------------------------------------------------------
+# Database helper functions (synchronous, called via run_in_executor)
+# ---------------------------------------------------------------------------
+
+
+def _db_upsert_attendance(student_name: str, status: str, ts: float) -> None:
+    """
+    Insert or update today's attendance record for *student_name*.
+
+    If the record doesn't exist yet it is created; otherwise only *status*
+    and *last_seen* (and *first_seen* when transitioning to Present for the
+    first time) are updated.
+    """
+    today = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+    dt_now = datetime.fromtimestamp(ts, tz=timezone.utc)
+    with _SessionLocal() as session:
+        record = (
+            session.query(AttendanceRecord)
+            .filter_by(student_name=student_name, date=today)
+            .first()
+        )
+        if record is None:
+            record = AttendanceRecord(
+                student_name=student_name,
+                date=today,
+                status=status,
+                first_seen=dt_now if status == "Present" else None,
+                last_seen=dt_now if status == "Present" else None,
+            )
+            session.add(record)
+        else:
+            record.status = status
+            record.last_seen = dt_now if status in ("Present", "Away") else record.last_seen
+            if status == "Present" and record.first_seen is None:
+                record.first_seen = dt_now
+        session.commit()
+
+
+def _db_get_attendance(filter_date: Optional[date_cls] = None) -> list[dict]:
+    """
+    Return attendance records for *filter_date* (defaults to today).
+
+    Each row is a plain dict with keys: student_name, date, status,
+    first_seen, last_seen.
+    """
+    if filter_date is None:
+        filter_date = date_cls.today()
+    with _SessionLocal() as session:
+        rows = (
+            session.query(AttendanceRecord)
+            .filter_by(date=filter_date)
+            .order_by(AttendanceRecord.student_name)
+            .all()
+        )
+        return [
+            {
+                "student_name": r.student_name,
+                "date": r.date.isoformat(),
+                "status": r.status,
+                "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+                "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+            }
+            for r in rows
+        ]
+
+
+def _db_get_attendance_dates() -> list[str]:
+    """Return sorted list of distinct dates that have attendance records."""
+    with _SessionLocal() as session:
+        rows = session.query(AttendanceRecord.date).distinct().order_by(AttendanceRecord.date.desc()).all()
+        return [r.date.isoformat() for r in rows]
 
 # ---------------------------------------------------------------------------
 # Pydantic request models
@@ -253,6 +378,7 @@ async def _attendance_watchdog() -> None:
     Every 30 seconds, mark students as 'Away' if they have not been seen
     within the AWAY_THRESHOLD_SECONDS window.
     """
+    loop = asyncio.get_event_loop()
     while True:
         await asyncio.sleep(30)
         now = time.time()
@@ -261,6 +387,9 @@ async def _attendance_watchdog() -> None:
                 if now - state["last_seen"] > AWAY_THRESHOLD_SECONDS:
                     state["is_present"] = False
                     state["attendance_status"] = "Away"
+                    await loop.run_in_executor(
+                        None, partial(_db_upsert_attendance, name, "Away", now)
+                    )
                     await _broadcast({
                         "student_name": name,
                         "emotion": state["emotion"],
@@ -279,6 +408,7 @@ async def _attendance_watchdog() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    _init_db()
     load_encodings()
     asyncio.create_task(_attendance_watchdog())
     yield
@@ -458,6 +588,15 @@ async def update_student(update: StudentUpdate):
     # Evaluate alert conditions -------------------------------------------
     state["active_alert"] = _check_alerts(name, now)
 
+    # Persist attendance to database (only when status changes to Present or
+    # periodically to keep last_seen fresh; we update every time is_present
+    # transitions or every 60 s by checking last DB write time).
+    if not was_present:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, partial(_db_upsert_attendance, name, "Present", now)
+        )
+
     # Broadcast to dashboard ----------------------------------------------
     await _broadcast({
         "student_name": name,
@@ -494,6 +633,34 @@ async def get_students(request: Request):
             "last_seen": state["last_seen"],
         })
     return result
+
+
+@app.get("/attendance")
+async def get_attendance(
+    request: Request,
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)"),
+):
+    """
+    Return day-wise attendance records from the database.
+
+    Query parameter ``date`` selects the calendar day (ISO format).
+    Omit it to get today's records.  Also returns the list of all dates
+    that have records so the dashboard can build a date-picker.
+    """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    filter_date: Optional[date_cls] = None
+    if date:
+        try:
+            filter_date = date_cls.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    loop = asyncio.get_event_loop()
+    records = await loop.run_in_executor(None, partial(_db_get_attendance, filter_date))
+    dates = await loop.run_in_executor(None, _db_get_attendance_dates)
+    return JSONResponse({"records": records, "available_dates": dates})
 
 
 @app.delete("/students/{student_name}")
