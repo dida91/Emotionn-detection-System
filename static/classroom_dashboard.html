@@ -453,6 +453,37 @@
       margin-top: 5px;
     }
 
+    .btn-remove-student {
+      background: transparent;
+      border: 1px solid var(--red);
+      color: var(--red);
+      border-radius: 5px;
+      padding: 4px 10px;
+      font-size: .72rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+      margin-left: 6px;
+      transition: background .15s, color .15s;
+    }
+    .btn-remove-student:hover:not(:disabled) {
+      background: var(--red);
+      color: #fff;
+      opacity: 1;
+      transform: none;
+    }
+
+    #btn-remove-all {
+      background: transparent;
+      border: 1px solid var(--red);
+      color: var(--red);
+    }
+    #btn-remove-all:hover:not(:disabled) {
+      background: var(--red);
+      color: #fff;
+      opacity: 1;
+    }
+
     /* ── Empty State ─────────────────────────────────────────────────────── */
     #empty-state {
       display: none;
@@ -613,7 +644,10 @@
     <div id="student-grid"></div>
 
     <!-- Enrolment -->
-    <p class="section-title">Enrol New Student</p>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+      <p class="section-title" style="margin-bottom:0;">Enrol New Student</p>
+      <button id="btn-remove-all" class="btn-secondary">🗑 Remove All Students</button>
+    </div>
     <div id="enroll-section">
       <div class="enroll-controls">
         <label class="field-label">
@@ -843,14 +877,20 @@ function applyFilter() {
 }
 
 /* ── Student Cards ─────────────────────────────────────────────────────── */
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function getOrCreateCard(name) {
   let card = document.getElementById(`card-${CSS.escape(name)}`);
   if (!card) {
     card = document.createElement('div');
     card.className = 'student-card absent';
     card.id = `card-${name}`;
+    const safeName = escapeHtml(name);
     card.innerHTML = `
-      <div class="student-name" title="${name}">${name}</div>
+      <div class="student-name" title="${safeName}">${safeName}</div>
       <div class="status-row">
         <span class="status-badge status-absent">Absent</span>
       </div>
@@ -862,7 +902,9 @@ function getOrCreateCard(name) {
       <div class="alert-banner alert-distress-banner">🚨 Emotional Distress</div>
       <div class="alert-banner alert-engagement-banner">⚠️ Low Engagement</div>
       <div class="last-seen">Last seen: <span>—</span></div>
+      <button class="btn-remove-student" title="Remove this student">🗑 Remove</button>
     `;
+    card.querySelector('.btn-remove-student').addEventListener('click', () => removeStudent(name));
     // Insert with priority: alerts first, then by name
     document.getElementById('student-grid').appendChild(card);
     document.getElementById('empty-state').classList.remove('visible');
@@ -946,6 +988,15 @@ function connectWS() {
     try { data = JSON.parse(ev.data); } catch (_) { return; }
     if (data.event === 'enrolled' && !data.attendance_status) {
       getOrCreateCard(data.student_name);
+      return;
+    }
+    if (data.event === 'removed') {
+      deleteCardLocally(data.student_name);
+      _updateEmptyStateAndSummary();
+      return;
+    }
+    if (data.event === 'removed_all') {
+      removeAllCardsLocally();
       return;
     }
     const name = data.student_name;
@@ -1051,6 +1102,59 @@ btnCapture.addEventListener('click', async () => {
     setEnrollStatus(`Network error: ${e.message}`, 'err');
   } finally {
     btnCapture.disabled = false;
+  }
+});
+
+/* ── Remove Students ───────────────────────────────────────────────────── */
+async function removeStudent(name) {
+  if (!confirm(`Remove student "${name}"? This will delete all their face encodings.`)) return;
+  try {
+    const res = await fetch(`/students/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const json = await res.json();
+    if (res.ok) {
+      deleteCardLocally(name);
+      _updateEmptyStateAndSummary();
+    } else {
+      alert(json.detail || 'Failed to remove student.');
+    }
+  } catch (e) {
+    alert(`Network error: ${e.message}`);
+  }
+}
+
+function deleteCardLocally(name) {
+  const card = document.getElementById(`card-${CSS.escape(name)}`);
+  if (card) card.remove();
+  delete students[name];
+}
+
+function _updateEmptyStateAndSummary() {
+  if (Object.keys(students).length === 0) {
+    document.getElementById('empty-state').classList.add('visible');
+  }
+  refreshSummary();
+}
+
+function removeAllCardsLocally() {
+  const names = Object.keys(students);
+  names.forEach(n => deleteCardLocally(n));
+  _updateEmptyStateAndSummary();
+}
+
+document.getElementById('btn-remove-all').addEventListener('click', async () => {
+  const total = Object.keys(students).length;
+  if (total === 0) { alert('No enrolled students to remove.'); return; }
+  if (!confirm(`Remove ALL ${total} student(s)? This cannot be undone.`)) return;
+  try {
+    const res = await fetch('/students', { method: 'DELETE' });
+    const json = await res.json();
+    if (res.ok) {
+      removeAllCardsLocally();
+    } else {
+      alert(json.detail || 'Failed to remove all students.');
+    }
+  } catch (e) {
+    alert(`Network error: ${e.message}`);
   }
 });
 
