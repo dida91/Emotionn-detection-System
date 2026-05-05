@@ -7,7 +7,11 @@ dashboard via WebSocket.
 
 Endpoints
 ---------
-GET  /                  Serve the teacher dashboard HTML.
+GET  /                  Serve the teacher dashboard HTML (auth required).
+GET  /login             Serve the teacher login page.
+POST /login             Authenticate and start a session.
+POST /logout            Destroy the current session.
+GET  /me                Return the authenticated teacher's username.
 POST /enroll            Register a new student face from a base64 image.
 POST /update            Receive a per-student update from the video processor.
 GET  /students          Return the current snapshot of all student states.
@@ -17,6 +21,8 @@ WS   /ws/dashboard      Push live JSON packets to connected dashboard clients.
 import asyncio
 import base64
 import json
+import os
+import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -27,10 +33,11 @@ import cv2
 import face_recognition
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -62,6 +69,30 @@ DISTRESS_EMOTIONS = {"sad", "angry"}
 # Emotions and head poses that contribute to the Low Engagement alert.
 DISENGAGED_EMOTIONS = {"neutral"}
 DISENGAGED_POSES = {"left", "right", "down"}
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+_SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+_TEACHER_USERNAME = os.environ.get("TEACHER_USERNAME", "teacher")
+_TEACHER_PASSWORD = os.environ.get("TEACHER_PASSWORD", "")
+
+if not _TEACHER_PASSWORD:
+    import warnings
+    warnings.warn(
+        "TEACHER_PASSWORD is not set. Login will be disabled until it is configured.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+
+if not os.environ.get("SECRET_KEY"):
+    import warnings
+    warnings.warn(
+        "SECRET_KEY is not set. A random key will be generated, invalidating sessions on restart.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
 
 # ---------------------------------------------------------------------------
 # Pydantic request models
@@ -254,9 +285,19 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
 
 app = FastAPI(title="Classroom Monitoring System", lifespan=lifespan)
-
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_SECRET_KEY,
+    same_site="lax",
+    https_only=False,
+)
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _is_authenticated(request: Request) -> bool:
+    """Return True if the request carries a valid teacher session."""
+    return bool(request.session.get("authenticated"))
 
 
 # ---------------------------------------------------------------------------
@@ -265,16 +306,67 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
-    """Serve the teacher dashboard single-page application."""
+async def serve_dashboard(request: Request):
+    """Serve the teacher dashboard single-page application (requires login)."""
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
     dashboard_path = STATIC_DIR / "classroom_dashboard.html"
     if not dashboard_path.exists():
         return HTMLResponse("<h1>Dashboard file not found.</h1>", status_code=404)
     return HTMLResponse(dashboard_path.read_text(encoding="utf-8"))
 
 
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login(request: Request):
+    """Serve the teacher login page."""
+    if _is_authenticated(request):
+        return RedirectResponse("/", status_code=303)
+    login_path = STATIC_DIR / "classroom_login.html"
+    if not login_path.exists():
+        return HTMLResponse("<h1>Login page not found.</h1>", status_code=404)
+    return HTMLResponse(login_path.read_text(encoding="utf-8"))
+
+
+@app.post("/login")
+async def do_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    """Validate credentials and establish an authenticated session."""
+    if not _TEACHER_PASSWORD:
+        raise HTTPException(status_code=503, detail="Authentication is not configured on this server.")
+    if username == _TEACHER_USERNAME and password == _TEACHER_PASSWORD:
+        request.session["authenticated"] = True
+        request.session["username"] = username
+        return RedirectResponse("/", status_code=303)
+    login_path = STATIC_DIR / "classroom_login.html"
+    html = login_path.read_text(encoding="utf-8") if login_path.exists() else "<h1>Login</h1>"
+    # Inject an error message into the page.
+    html = html.replace(
+        'id="login-error" class="login-error"',
+        'id="login-error" class="login-error visible"',
+    )
+    return HTMLResponse(html, status_code=401)
+
+
+@app.post("/logout")
+async def do_logout(request: Request):
+    """Clear the teacher session."""
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/me")
+async def get_me(request: Request):
+    """Return the authenticated teacher's username."""
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return {"username": request.session.get("username", "Teacher")}
+
+
 @app.post("/enroll")
-async def enroll_student(request: EnrollRequest):
+async def enroll_student(request: Request, req: EnrollRequest):
     """
     Register a new student.
 
@@ -282,13 +374,15 @@ async def enroll_student(request: EnrollRequest):
     encoding, and appends it to the student's known-encoding list.
     Multiple enrolment frames improve recognition accuracy.
     """
-    name = request.student_name.strip()
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    name = req.student_name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Student name is required.")
 
     # Decode image --------------------------------------------------------
     try:
-        img_bytes = base64.b64decode(request.image_base64)
+        img_bytes = base64.b64decode(req.image_base64)
         np_arr = np.frombuffer(img_bytes, dtype=np.uint8)
         bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -379,13 +473,15 @@ async def update_student(update: StudentUpdate):
 
 
 @app.get("/students")
-async def get_students():
+async def get_students(request: Request):
     """
     Return the current snapshot of all enrolled students.
 
     Used by the dashboard to populate itself when it first loads, before
     any WebSocket messages arrive.
     """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
     result = []
     for name, state in student_states.items():
         result.append({
@@ -414,6 +510,14 @@ async def dashboard_websocket(websocket: WebSocket):
     so the dashboard can hydrate immediately.  Subsequent updates are pushed
     by the /update endpoint via _broadcast().
     """
+    # Reject unauthenticated WebSocket connections.
+    # Read the session from the ASGI scope directly, since SessionMiddleware
+    # sets scope["session"] for both HTTP and WebSocket connections.
+    session = websocket.scope.get("session", {})
+    if not session.get("authenticated"):
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     connected_clients.append(websocket)
 
