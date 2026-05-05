@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Classroom Monitoring Dashboard</title>
+  <title>Classroom Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -20,6 +21,7 @@
       --blue:         #3498db;
       --yellow:       #f1c40f;
       --purple:       #9b59b6;
+      --teal:         #1abc9c;
       --alert-red:    #c0392b;
       --alert-yellow: #d4ac0d;
       --radius:       10px;
@@ -33,40 +35,41 @@
       min-height: 100vh;
     }
 
-    /* ---------------------------------------------------------------
-       Header
-    --------------------------------------------------------------- */
+    /* ── Header ─────────────────────────────────────────────────────────── */
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 14px 28px;
+      padding: 12px 24px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
       z-index: 100;
       box-shadow: var(--shadow);
+      gap: 12px;
+      flex-wrap: wrap;
     }
     header h1 {
-      font-size: 1.25rem;
+      font-size: 1.2rem;
       font-weight: 700;
-      letter-spacing: .5px;
+      letter-spacing: .4px;
+      white-space: nowrap;
     }
     header h1 span { color: var(--blue); }
 
-    .header-right {
+    .header-center {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 10px;
+      flex-wrap: wrap;
     }
 
-    /* Refresh indicator */
     #refresh-indicator {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: .78rem;
+      font-size: .75rem;
       color: var(--text-muted);
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -74,41 +77,99 @@
       padding: 4px 10px;
     }
     #refresh-dot {
-      width: 8px; height: 8px;
+      width: 7px; height: 7px;
       border-radius: 50%;
       background: var(--blue);
-      animation: pulse-blue 1s ease-in-out infinite;
+      animation: pulse-blue 1.2s ease-in-out infinite;
     }
     @keyframes pulse-blue {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50%       { opacity: .4; transform: scale(.75); }
+      50%       { opacity: .35; transform: scale(.7); }
     }
 
     #ws-status {
       display: flex;
       align-items: center;
-      gap: 7px;
-      font-size: .82rem;
+      gap: 6px;
+      font-size: .8rem;
       color: var(--text-muted);
     }
     #ws-dot {
-      width: 10px; height: 10px;
+      width: 9px; height: 9px;
       border-radius: 50%;
       background: var(--red);
       transition: background .4s;
     }
     #ws-dot.connected { background: var(--green); }
 
-    /* ---------------------------------------------------------------
-       Summary bar
-    --------------------------------------------------------------- */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .teacher-chip {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: .82rem;
+      color: var(--text-muted);
+    }
+    .teacher-chip strong { color: var(--text); }
+
+    #btn-logout {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: .8rem;
+      cursor: pointer;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    #btn-logout:hover { color: var(--red); border-color: var(--red); background: rgba(231,76,60,.08); }
+
+    /* ── Alert Strip ─────────────────────────────────────────────────────── */
+    #alert-strip {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 24px;
+      background: rgba(192,57,43,.18);
+      border-bottom: 1px solid rgba(192,57,43,.4);
+      font-size: .85rem;
+      font-weight: 600;
+      color: #e87a6f;
+      flex-wrap: wrap;
+    }
+    #alert-strip.visible { display: flex; }
+    #alert-strip .strip-icon { font-size: 1.1rem; }
+    #alert-strip .alert-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    .alert-pill {
+      background: rgba(192,57,43,.25);
+      border: 1px solid rgba(192,57,43,.4);
+      border-radius: 12px;
+      padding: 2px 10px;
+      font-size: .78rem;
+    }
+    .alert-pill.engagement {
+      background: rgba(212,172,13,.2);
+      border-color: rgba(212,172,13,.4);
+      color: #e8c93e;
+    }
+
+    /* ── Summary Bar ─────────────────────────────────────────────────────── */
     #summary-bar {
       display: flex;
-      gap: 16px;
-      padding: 12px 28px;
+      gap: 12px;
+      padding: 10px 24px;
       background: var(--surface2);
       border-bottom: 1px solid var(--border);
-      font-size: .85rem;
+      font-size: .82rem;
       flex-wrap: wrap;
       align-items: center;
     }
@@ -118,46 +179,166 @@
       gap: 6px;
       padding: 5px 12px;
       border-radius: 20px;
-      font-weight: 600;
+      font-weight: 700;
     }
-    .chip-present  { background: rgba(46,204,113,.15); color: var(--green); }
-    .chip-away     { background: rgba(243,156,18,.15);  color: var(--orange); }
+    .chip-present  { background: rgba(46,204,113,.12); color: var(--green); }
+    .chip-away     { background: rgba(243,156,18,.12);  color: var(--orange); }
     .chip-absent   { background: rgba(142,150,181,.1);  color: var(--text-muted); }
-    .chip-alert    { background: rgba(231,76,60,.15);   color: var(--red); }
+    .chip-alert    { background: rgba(231,76,60,.12);   color: var(--red); }
+    .chip-engage   { background: rgba(52,152,219,.12);  color: var(--blue); }
 
-    /* Last-updated timestamp */
     #last-updated {
       margin-left: auto;
-      font-size: .75rem;
+      font-size: .73rem;
       color: var(--text-muted);
     }
     #last-updated span { color: var(--text); font-weight: 600; }
 
-    /* ---------------------------------------------------------------
-       Main layout
-    --------------------------------------------------------------- */
-    main {
-      padding: 24px 28px;
-      max-width: 1400px;
+    /* ── Filter Bar ──────────────────────────────────────────────────────── */
+    #filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      background: var(--surface2);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: .78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .filter-btn:hover { border-color: var(--blue); color: var(--text); }
+    .filter-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+    /* ── Main Layout ─────────────────────────────────────────────────────── */
+    #page-body {
+      display: flex;
+      gap: 24px;
+      padding: 24px;
+      max-width: 1500px;
       margin: 0 auto;
+      align-items: flex-start;
+    }
+
+    #left-panel { flex: 1 1 0; min-width: 0; }
+
+    #right-panel {
+      width: 300px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    @media (max-width: 1000px) {
+      #page-body { flex-direction: column; }
+      #right-panel { width: 100%; }
     }
 
     .section-title {
-      font-size: .78rem;
+      font-size: .75rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 1.2px;
       color: var(--text-muted);
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
 
-    /* ---------------------------------------------------------------
-       Student grid
-    --------------------------------------------------------------- */
+    /* ── Overview Cards ──────────────────────────────────────────────────── */
+    .overview-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .overview-card .section-title { margin-bottom: 10px; }
+
+    /* ── Emotion Chart ───────────────────────────────────────────────────── */
+    #chart-wrap {
+      position: relative;
+      height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #chart-center-label {
+      position: absolute;
+      text-align: center;
+      pointer-events: none;
+    }
+    #chart-center-label .big-emoji { font-size: 1.8rem; display: block; }
+    #chart-center-label .label-text {
+      font-size: .7rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+      display: block;
+    }
+
+    /* ── Stats ───────────────────────────────────────────────────────────── */
+    .stat-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: .82rem;
+    }
+    .stat-row:last-child { margin-bottom: 0; }
+    .stat-label { color: var(--text-muted); }
+    .stat-value { font-weight: 700; color: var(--text); }
+    .stat-value.green { color: var(--green); }
+    .stat-value.red   { color: var(--red); }
+    .stat-value.orange { color: var(--orange); }
+
+    .progress-track {
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 5px;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--blue);
+      transition: width .5s ease;
+    }
+    .progress-fill.good  { background: var(--green); }
+    .progress-fill.warn  { background: var(--orange); }
+    .progress-fill.bad   { background: var(--red); }
+
+    /* ── Alert List ──────────────────────────────────────────────────────── */
+    .alert-list-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 7px;
+      margin-bottom: 6px;
+      font-size: .82rem;
+    }
+    .alert-list-item:last-child { margin-bottom: 0; }
+    .alert-list-item.distress {
+      background: rgba(192,57,43,.18);
+      border: 1px solid rgba(192,57,43,.35);
+    }
+    .alert-list-item.engagement {
+      background: rgba(212,172,13,.15);
+      border: 1px solid rgba(212,172,13,.3);
+    }
+    .alert-list-item .a-name { font-weight: 700; }
+    .alert-list-item .a-type { font-size: .75rem; margin-top: 1px; color: var(--text-muted); }
+    .no-alerts { font-size: .82rem; color: var(--text-muted); font-style: italic; }
+
+    /* ── Student Grid ────────────────────────────────────────────────────── */
     #student-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 14px;
       margin-bottom: 32px;
     }
 
@@ -165,12 +346,13 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 18px 16px 14px;
+      padding: 16px 14px 12px;
       position: relative;
       transition: transform .15s, box-shadow .15s;
       overflow: hidden;
     }
     .student-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+    .student-card.hidden-card { display: none; }
 
     /* Coloured left-edge accent */
     .student-card::before {
@@ -182,22 +364,29 @@
       background: var(--border);
       transition: background .3s;
     }
-    .student-card.present::before  { background: var(--green); }
-    .student-card.away::before     { background: var(--orange); }
-    .student-card.absent::before   { background: var(--text-muted); }
+    .student-card.present::before          { background: var(--green); }
+    .student-card.away::before             { background: var(--orange); }
+    .student-card.absent::before           { background: var(--text-muted); }
     .student-card.alert-distress::before   { background: var(--alert-red); }
     .student-card.alert-engagement::before { background: var(--alert-yellow); }
 
-    /* Flash animation when card data refreshes */
     @keyframes card-refresh {
       0%   { background: var(--surface); }
-      30%  { background: rgba(52,152,219,.08); }
+      30%  { background: rgba(52,152,219,.07); }
       100% { background: var(--surface); }
     }
     .student-card.refreshing { animation: card-refresh .5s ease-out; }
 
+    /* Alert pulse ring */
+    @keyframes ring-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(192,57,43,.5); }
+      70%  { box-shadow: 0 0 0 6px rgba(192,57,43,0); }
+      100% { box-shadow: 0 0 0 0 rgba(192,57,43,0); }
+    }
+    .student-card.alert-distress { animation: ring-pulse 1.8s infinite; }
+
     .student-name {
-      font-size: 1rem;
+      font-size: .95rem;
       font-weight: 700;
       margin-bottom: 8px;
       padding-left: 8px;
@@ -210,70 +399,83 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 9px;
       padding-left: 8px;
     }
     .status-badge {
-      font-size: .72rem;
+      font-size: .68rem;
       font-weight: 700;
-      padding: 3px 9px;
+      padding: 2px 8px;
       border-radius: 12px;
       text-transform: uppercase;
       letter-spacing: .6px;
     }
-    .status-present { background: rgba(46,204,113,.2);  color: var(--green); }
-    .status-away    { background: rgba(243,156,18,.2);   color: var(--orange); }
-    .status-absent  { background: rgba(142,150,181,.15); color: var(--text-muted); }
+    .status-present { background: rgba(46,204,113,.18);  color: var(--green); }
+    .status-away    { background: rgba(243,156,18,.18);   color: var(--orange); }
+    .status-absent  { background: rgba(142,150,181,.12);  color: var(--text-muted); }
 
     .emotion-display {
       display: flex;
       align-items: center;
       gap: 8px;
       padding-left: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
-    .emotion-emoji { font-size: 1.6rem; line-height: 1; }
-    .emotion-label { font-size: .85rem; color: var(--text-muted); text-transform: capitalize; }
+    .emotion-emoji { font-size: 1.55rem; line-height: 1; }
+    .emotion-label { font-size: .82rem; color: var(--text-muted); text-transform: capitalize; }
 
     .head-pose-label {
       font-size: .72rem;
       color: var(--text-muted);
       padding-left: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .head-pose-label span { color: var(--text); font-weight: 600; }
 
-    /* Alert banner */
     .alert-banner {
       display: none;
       align-items: center;
       gap: 7px;
-      padding: 6px 10px;
+      padding: 5px 9px;
       border-radius: 6px;
-      font-size: .78rem;
+      font-size: .75rem;
       font-weight: 700;
       margin-top: 4px;
     }
     .alert-banner.visible { display: flex; }
-    .alert-distress-banner   { background: rgba(192,57,43,.25);  color: #e87a6f; border: 1px solid rgba(192,57,43,.4); }
-    .alert-engagement-banner { background: rgba(212,172,13,.2);  color: #e8c93e; border: 1px solid rgba(212,172,13,.35); }
+    .alert-distress-banner   { background: rgba(192,57,43,.22);  color: #e87a6f; border: 1px solid rgba(192,57,43,.4); }
+    .alert-engagement-banner { background: rgba(212,172,13,.18); color: #e8c93e; border: 1px solid rgba(212,172,13,.32); }
 
     .last-seen {
-      font-size: .68rem;
+      font-size: .67rem;
       color: var(--text-muted);
       padding-left: 8px;
-      margin-top: 6px;
+      margin-top: 5px;
     }
 
-    /* ---------------------------------------------------------------
-       Enrolment panel
-    --------------------------------------------------------------- */
+    /* ── Empty State ─────────────────────────────────────────────────────── */
+    #empty-state {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    #empty-state.visible { display: flex; }
+    #empty-state .big-icon { font-size: 3rem; }
+    #empty-state p { font-size: .9rem; max-width: 340px; }
+
+    /* ── Enrolment Section ───────────────────────────────────────────────── */
     #enroll-section {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 20px;
       max-width: 520px;
+      margin-bottom: 24px;
     }
 
     .enroll-controls {
@@ -311,17 +513,16 @@
       color: #fff;
       border: none;
       border-radius: 6px;
-      padding: 9px 18px;
-      font-size: .88rem;
+      padding: 9px 16px;
+      font-size: .85rem;
       font-weight: 600;
       cursor: pointer;
       transition: opacity .15s, transform .1s;
     }
-    button:hover:not(:disabled) { opacity: .88; transform: translateY(-1px); }
+    button:hover:not(:disabled) { opacity: .87; transform: translateY(-1px); }
     button:active:not(:disabled) { transform: translateY(0); }
-    button:disabled { opacity: .45; cursor: not-allowed; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
     button.btn-secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
-    button.btn-danger     { background: var(--red); }
 
     #enroll-video-container {
       display: none;
@@ -347,127 +548,301 @@
     }
     .status-ok  { color: var(--green); }
     .status-err { color: var(--red); }
-
-    /* ---------------------------------------------------------------
-       Empty state
-    --------------------------------------------------------------- */
-    #empty-state {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      padding: 60px 20px;
-      color: var(--text-muted);
-      text-align: center;
-    }
-    #empty-state.visible { display: flex; }
-    #empty-state .big-icon { font-size: 3rem; }
-    #empty-state p { font-size: .95rem; max-width: 360px; }
   </style>
 </head>
 <body>
 
-<!-- ------------------------------------------------------------------ Header -->
+<!-- ── Header ────────────────────────────────────────────────────────────── -->
 <header>
   <h1>🎓 Classroom <span>Monitor</span></h1>
-  <div class="header-right">
+
+  <div class="header-center">
     <div id="refresh-indicator">
       <div id="refresh-dot"></div>
-      <span>Auto-refresh: 1s</span>
+      <span>Live</span>
     </div>
     <div id="ws-status">
       <div id="ws-dot"></div>
       <span id="ws-label">Connecting…</span>
     </div>
   </div>
+
+  <div class="header-right">
+    <div class="teacher-chip">👤 <strong id="teacher-name">…</strong></div>
+    <button id="btn-logout">Sign Out</button>
+  </div>
 </header>
 
-<!-- ------------------------------------------------------------------ Summary -->
-<div id="summary-bar">
-  <div class="summary-chip chip-present">🟢 Present: <span id="count-present">0</span></div>
-  <div class="summary-chip chip-away">🟠 Away: <span id="count-away">0</span></div>
-  <div class="summary-chip chip-absent">⚫ Absent: <span id="count-absent">0</span></div>
-  <div class="summary-chip chip-alert">🔴 Alerts: <span id="count-alert">0</span></div>
-  <div id="last-updated">Last updated: <span id="last-updated-time">—</span></div>
+<!-- ── Alert Strip ───────────────────────────────────────────────────────── -->
+<div id="alert-strip">
+  <span class="strip-icon">🚨</span>
+  <span>Active Alerts:</span>
+  <div class="alert-pills" id="alert-pills"></div>
 </div>
 
-<main>
+<!-- ── Summary Bar ───────────────────────────────────────────────────────── -->
+<div id="summary-bar">
+  <div class="summary-chip chip-present">🟢 Present <span id="count-present">0</span></div>
+  <div class="summary-chip chip-away">🟠 Away <span id="count-away">0</span></div>
+  <div class="summary-chip chip-absent">⚫ Absent <span id="count-absent">0</span></div>
+  <div class="summary-chip chip-alert">🔴 Alerts <span id="count-alert">0</span></div>
+  <div class="summary-chip chip-engage">📊 Engaged <span id="count-engaged">0%</span></div>
+  <div id="last-updated">Updated: <span id="last-updated-time">—</span></div>
+</div>
 
-  <!-- ---------------------------------------------------------------- Student grid -->
-  <p class="section-title">Live Student Status</p>
+<!-- ── Main Body ──────────────────────────────────────────────────────────── -->
+<div id="page-body">
 
-  <div id="empty-state" class="visible">
-    <div class="big-icon">📷</div>
-    <p>No enrolled students yet. Use the panel below to enrol your first student, then start the video processor.</p>
-  </div>
+  <!-- Left Panel: student grid -->
+  <div id="left-panel">
+    <p class="section-title">Live Student Status</p>
 
-  <div id="student-grid"></div>
-
-  <!-- ---------------------------------------------------------------- Enrolment -->
-  <p class="section-title">Enrol New Student</p>
-
-  <div id="enroll-section">
-    <div class="enroll-controls">
-      <label class="field-label">
-        Student name
-        <input type="text" id="enroll-name" placeholder="e.g. Alice" maxlength="80" />
-      </label>
-      <button id="btn-open-camera">Open Camera</button>
+    <div id="filter-bar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="alert">⚠ Alerts</button>
+      <button class="filter-btn" data-filter="present">Present</button>
+      <button class="filter-btn" data-filter="away">Away</button>
+      <button class="filter-btn" data-filter="absent">Absent</button>
     </div>
 
-    <div id="enroll-video-container">
-      <video id="enroll-video" autoplay playsinline></video>
-      <canvas id="enroll-canvas"></canvas>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button id="btn-capture">📸 Capture &amp; Enrol</button>
-        <button class="btn-secondary" id="btn-close-camera">✕ Close Camera</button>
+    <div id="empty-state" class="visible">
+      <div class="big-icon">📷</div>
+      <p>No enrolled students yet. Use the panel below to enrol your first student, then start the video processor.</p>
+    </div>
+
+    <div id="student-grid"></div>
+
+    <!-- Enrolment -->
+    <p class="section-title">Enrol New Student</p>
+    <div id="enroll-section">
+      <div class="enroll-controls">
+        <label class="field-label">
+          Student name
+          <input type="text" id="enroll-name" placeholder="e.g. Alice" maxlength="80" />
+        </label>
+        <button id="btn-open-camera">Open Camera</button>
+      </div>
+
+      <div id="enroll-video-container">
+        <video id="enroll-video" autoplay playsinline></video>
+        <canvas id="enroll-canvas"></canvas>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button id="btn-capture">📸 Capture &amp; Enrol</button>
+          <button class="btn-secondary" id="btn-close-camera">✕ Close Camera</button>
+        </div>
+      </div>
+
+      <p id="enroll-status"></p>
+    </div>
+  </div>
+
+  <!-- Right Panel: overview -->
+  <div id="right-panel">
+
+    <!-- Emotion distribution chart -->
+    <div class="overview-card">
+      <p class="section-title">Class Emotions</p>
+      <div id="chart-wrap">
+        <canvas id="emotion-chart"></canvas>
+        <div id="chart-center-label">
+          <span class="big-emoji" id="dominant-emoji">😐</span>
+          <span class="label-text" id="dominant-label">neutral</span>
+        </div>
       </div>
     </div>
 
-    <p id="enroll-status"></p>
-  </div>
+    <!-- Class stats -->
+    <div class="overview-card">
+      <p class="section-title">Class Stats</p>
 
-</main>
+      <div class="stat-row">
+        <span class="stat-label">Total Students</span>
+        <span class="stat-value" id="stat-total">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Attendance Rate</span>
+        <span class="stat-value green" id="stat-attendance">0%</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Engagement Rate</span>
+        <span class="stat-value" id="stat-engagement">0%</span>
+      </div>
+      <div class="progress-track" style="margin-top:-4px; margin-bottom:10px;">
+        <div class="progress-fill" id="engage-bar" style="width:0%"></div>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Dominant Emotion</span>
+        <span class="stat-value" id="stat-dominant">—</span>
+      </div>
+    </div>
+
+    <!-- Active alerts -->
+    <div class="overview-card">
+      <p class="section-title">Active Alerts</p>
+      <div id="alert-list-panel">
+        <p class="no-alerts">No active alerts ✅</p>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <script>
-/* ====================================================================
-   Utilities
-==================================================================== */
+/* ── Constants ─────────────────────────────────────────────────────────── */
 const EMOTION_EMOJI = {
-  happy:     '😊',
-  sad:       '😢',
-  angry:     '😠',
-  neutral:   '😐',
-  surprised: '😲',
-  fear:      '😨',
-  disgust:   '🤢',
+  happy:'😊', sad:'😢', angry:'😠', neutral:'😐',
+  surprised:'😲', fear:'😨', disgust:'🤢',
 };
-
+const EMOTION_COLOR = {
+  happy:    '#f1c40f',
+  sad:      '#3498db',
+  angry:    '#e74c3c',
+  neutral:  '#8a8fb5',
+  surprised:'#9b59b6',
+  fear:     '#e67e22',
+  disgust:  '#1abc9c',
+};
 const HEAD_POSE_LABEL = {
-  forward: '● Facing forward',
-  left:    '← Looking left',
-  right:   '→ Looking right',
-  down:    '↓ Looking down',
+  forward:'● Facing forward', left:'← Looking left',
+  right:'→ Looking right', down:'↓ Looking down',
 };
 
-function fmtTime(ts) {
-  if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleTimeString();
-}
-
-function nowTimeString() {
-  return new Date().toLocaleTimeString();
-}
-
-/* ====================================================================
-   State
-==================================================================== */
+/* ── State ─────────────────────────────────────────────────────────────── */
 const students = {};
+let activeFilter = 'all';
 
-/* ====================================================================
-   DOM helpers
-==================================================================== */
+/* ── Chart.js ──────────────────────────────────────────────────────────── */
+const chartCtx = document.getElementById('emotion-chart').getContext('2d');
+const EMOTION_LABELS = ['happy','sad','angry','neutral','surprised','fear','disgust'];
+
+const emotionChart = new Chart(chartCtx, {
+  type: 'doughnut',
+  data: {
+    labels: EMOTION_LABELS.map(e => e.charAt(0).toUpperCase() + e.slice(1)),
+    datasets: [{
+      data: new Array(EMOTION_LABELS.length).fill(0),
+      backgroundColor: EMOTION_LABELS.map(e => EMOTION_COLOR[e]),
+      borderWidth: 2,
+      borderColor: '#1a1d27',
+      hoverOffset: 6,
+    }],
+  },
+  options: {
+    cutout: '68%',
+    plugins: { legend: { display: false }, tooltip: {
+      callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` },
+    }},
+    animation: { duration: 400 },
+    responsive: true,
+    maintainAspectRatio: false,
+  },
+});
+
+function updateChart() {
+  const counts = {};
+  EMOTION_LABELS.forEach(e => (counts[e] = 0));
+  for (const s of Object.values(students)) {
+    if (s.is_present) {
+      const e = (s.emotion || 'neutral').toLowerCase();
+      if (counts[e] !== undefined) counts[e]++;
+    }
+  }
+  emotionChart.data.datasets[0].data = EMOTION_LABELS.map(e => counts[e]);
+  emotionChart.update('none');
+
+  // Dominant emotion
+  let maxE = 'neutral', maxN = 0;
+  for (const [e, n] of Object.entries(counts)) {
+    if (n > maxN) { maxN = n; maxE = e; }
+  }
+  document.getElementById('dominant-emoji').textContent  = EMOTION_EMOJI[maxE] || '😐';
+  document.getElementById('dominant-label').textContent  = maxE;
+  document.getElementById('stat-dominant').textContent   = maxE.charAt(0).toUpperCase() + maxE.slice(1);
+}
+
+/* ── Summary & Stats ───────────────────────────────────────────────────── */
+function refreshSummary() {
+  let present = 0, away = 0, absent = 0, alerts = 0, engaged = 0, total = 0;
+  for (const s of Object.values(students)) {
+    total++;
+    if (s.attendance_status === 'Present')      { present++; }
+    else if (s.attendance_status === 'Away')    { away++; }
+    else                                         { absent++; }
+    if (s.active_alert)                          { alerts++; }
+    if (s.is_present && s.head_pose === 'forward' && s.emotion !== 'neutral') { engaged++; }
+  }
+  const engagePct = present > 0 ? Math.round((engaged / present) * 100) : 0;
+  const attendPct = total   > 0 ? Math.round((present / total) * 100)   : 0;
+
+  document.getElementById('count-present').textContent  = present;
+  document.getElementById('count-away').textContent     = away;
+  document.getElementById('count-absent').textContent   = absent;
+  document.getElementById('count-alert').textContent    = alerts;
+  document.getElementById('count-engaged').textContent  = engagePct + '%';
+
+  document.getElementById('stat-total').textContent      = total;
+  document.getElementById('stat-attendance').textContent = attendPct + '%';
+  document.getElementById('stat-engagement').textContent = engagePct + '%';
+
+  const bar = document.getElementById('engage-bar');
+  bar.style.width = engagePct + '%';
+  bar.className = 'progress-fill' + (engagePct >= 60 ? ' good' : engagePct >= 30 ? ' warn' : ' bad');
+
+  // Alert strip
+  const alertStudents = Object.values(students).filter(s => s.active_alert);
+  const strip = document.getElementById('alert-strip');
+  const pills = document.getElementById('alert-pills');
+  if (alertStudents.length > 0) {
+    strip.classList.add('visible');
+    pills.innerHTML = alertStudents.map(s =>
+      `<span class="alert-pill${s.active_alert === 'Low Engagement' ? ' engagement' : ''}">${s.student_name}</span>`
+    ).join('');
+  } else {
+    strip.classList.remove('visible');
+  }
+
+  // Alert panel (right)
+  const panel = document.getElementById('alert-list-panel');
+  if (alertStudents.length === 0) {
+    panel.innerHTML = '<p class="no-alerts">No active alerts ✅</p>';
+  } else {
+    panel.innerHTML = alertStudents.map(s => `
+      <div class="alert-list-item ${s.active_alert === 'Emotional Distress' ? 'distress' : 'engagement'}">
+        <span>${s.active_alert === 'Emotional Distress' ? '🚨' : '⚠️'}</span>
+        <div>
+          <div class="a-name">${s.student_name}</div>
+          <div class="a-type">${s.active_alert}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  updateChart();
+}
+
+/* ── Filter ────────────────────────────────────────────────────────────── */
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.filter;
+    applyFilter();
+  });
+});
+
+function applyFilter() {
+  for (const [name, s] of Object.entries(students)) {
+    const card = document.getElementById(`card-${name}`);
+    if (!card) continue;
+    let show = true;
+    if (activeFilter === 'alert')   show = !!s.active_alert;
+    else if (activeFilter === 'present') show = s.attendance_status === 'Present';
+    else if (activeFilter === 'away')    show = s.attendance_status === 'Away';
+    else if (activeFilter === 'absent')  show = s.attendance_status === 'Absent';
+    card.classList.toggle('hidden-card', !show);
+  }
+}
+
+/* ── Student Cards ─────────────────────────────────────────────────────── */
 function getOrCreateCard(name) {
   let card = document.getElementById(`card-${CSS.escape(name)}`);
   if (!card) {
@@ -488,95 +863,73 @@ function getOrCreateCard(name) {
       <div class="alert-banner alert-engagement-banner">⚠️ Low Engagement</div>
       <div class="last-seen">Last seen: <span>—</span></div>
     `;
+    // Insert with priority: alerts first, then by name
     document.getElementById('student-grid').appendChild(card);
     document.getElementById('empty-state').classList.remove('visible');
   }
   return card;
 }
 
-function updateCard(name, data, flash = false) {
+function fmtTime(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
+function updateCard(name, data, doFlash = false) {
   const card = getOrCreateCard(name);
 
-  const status = (data.attendance_status || 'Absent').toLowerCase();
+  const status  = (data.attendance_status || 'Absent').toLowerCase();
   const emotion = (data.emotion || 'neutral').toLowerCase();
-  const pose = (data.head_pose || 'forward').toLowerCase();
-  const alert = data.active_alert || null;
+  const pose    = (data.head_pose || 'forward').toLowerCase();
+  const alert   = data.active_alert || null;
 
-  // Border accent class
   card.className = 'student-card';
-  if (alert === 'Emotional Distress') {
-    card.classList.add('alert-distress');
-  } else if (alert === 'Low Engagement') {
-    card.classList.add('alert-engagement');
-  } else {
-    card.classList.add(status === 'present' ? 'present' : status === 'away' ? 'away' : 'absent');
-  }
+  if (alert === 'Emotional Distress')  card.classList.add('alert-distress');
+  else if (alert === 'Low Engagement') card.classList.add('alert-engagement');
+  else card.classList.add(status === 'present' ? 'present' : status === 'away' ? 'away' : 'absent');
 
-  // Subtle flash to signal the 1-second refresh fired
-  if (flash) {
+  if (doFlash) {
     card.classList.add('refreshing');
     card.addEventListener('animationend', () => card.classList.remove('refreshing'), { once: true });
   }
 
-  // Status badge
-  const badge = card.querySelector('.status-badge');
-  badge.className = `status-badge status-${status}`;
-  badge.textContent = data.attendance_status || 'Absent';
-
-  // Emotion
+  card.querySelector('.status-badge').className   = `status-badge status-${status}`;
+  card.querySelector('.status-badge').textContent = data.attendance_status || 'Absent';
   card.querySelector('.emotion-emoji').textContent = EMOTION_EMOJI[emotion] || '😐';
   card.querySelector('.emotion-label').textContent = emotion;
-
-  // Head pose
   card.querySelector('.head-pose-label span').textContent = HEAD_POSE_LABEL[pose] || pose;
 
-  // Alert banners
-  const distressBanner = card.querySelector('.alert-distress-banner');
-  const engageBanner   = card.querySelector('.alert-engagement-banner');
-  distressBanner.classList.toggle('visible', alert === 'Emotional Distress');
-  engageBanner.classList.toggle('visible',   alert === 'Low Engagement');
-
-  // Last seen
+  card.querySelector('.alert-distress-banner').classList.toggle('visible',   alert === 'Emotional Distress');
+  card.querySelector('.alert-engagement-banner').classList.toggle('visible', alert === 'Low Engagement');
   card.querySelector('.last-seen span').textContent = fmtTime(data.last_seen || data.timestamp);
+
+  // Apply current filter
+  let show = true;
+  if (activeFilter === 'alert')        show = !!alert;
+  else if (activeFilter === 'present') show = status === 'present';
+  else if (activeFilter === 'away')    show = status === 'away';
+  else if (activeFilter === 'absent')  show = status === 'absent';
+  card.classList.toggle('hidden-card', !show);
 }
 
-function refreshSummary() {
-  let present = 0, away = 0, absent = 0, alerts = 0;
-  for (const s of Object.values(students)) {
-    if (s.attendance_status === 'Present') present++;
-    else if (s.attendance_status === 'Away') away++;
-    else absent++;
-    if (s.active_alert) alerts++;
-  }
-  document.getElementById('count-present').textContent = present;
-  document.getElementById('count-away').textContent    = away;
-  document.getElementById('count-absent').textContent  = absent;
-  document.getElementById('count-alert').textContent   = alerts;
-}
-
-/* ====================================================================
-   Fetch / poll helpers
-==================================================================== */
-async function fetchAndApply(flash = false) {
+/* ── Fetch / Poll ──────────────────────────────────────────────────────── */
+async function fetchAndApply(doFlash = false) {
   try {
     const res = await fetch('/students');
+    if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) return;
     const list = await res.json();
     for (const s of list) {
       students[s.student_name] = s;
-      updateCard(s.student_name, s, flash);
+      updateCard(s.student_name, s, doFlash);
     }
     refreshSummary();
-    // Update "last updated" timestamp
-    document.getElementById('last-updated-time').textContent = nowTimeString();
-  } catch (_) { /* silently ignore network errors */ }
+    document.getElementById('last-updated-time').textContent = new Date().toLocaleTimeString();
+  } catch (_) {}
 }
 
-/* ====================================================================
-   WebSocket connection
-==================================================================== */
-let ws = null;
-let wsRetryDelay = 1500;
+/* ── WebSocket ─────────────────────────────────────────────────────────── */
+let ws = null, wsRetryDelay = 1500;
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -588,22 +941,19 @@ function connectWS() {
     wsRetryDelay = 1500;
   });
 
-  ws.addEventListener('message', (ev) => {
+  ws.addEventListener('message', ev => {
     let data;
     try { data = JSON.parse(ev.data); } catch (_) { return; }
-
     if (data.event === 'enrolled' && !data.attendance_status) {
       getOrCreateCard(data.student_name);
       return;
     }
-
     const name = data.student_name;
     if (!name) return;
-
     students[name] = { ...(students[name] || {}), ...data };
     updateCard(name, students[name]);
     refreshSummary();
-    document.getElementById('last-updated-time').textContent = nowTimeString();
+    document.getElementById('last-updated-time').textContent = new Date().toLocaleTimeString();
   });
 
   ws.addEventListener('close', () => {
@@ -616,9 +966,13 @@ function connectWS() {
   ws.addEventListener('error', () => ws.close());
 }
 
-/* ====================================================================
-   Enrolment — camera capture
-==================================================================== */
+/* ── Logout ────────────────────────────────────────────────────────────── */
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await fetch('/logout', { method: 'POST' });
+  window.location.href = '/login';
+});
+
+/* ── Enrolment ─────────────────────────────────────────────────────────── */
 let cameraStream = null;
 
 const btnOpenCamera  = document.getElementById('btn-open-camera');
@@ -669,14 +1023,12 @@ btnCapture.addEventListener('click', async () => {
   ctx.scale(-1, 1);
   ctx.drawImage(videoEl, 0, 0);
 
-  const dataURL = canvasEl.toDataURL('image/jpeg', 0.92);
-  const base64  = dataURL.split(',')[1];
-
+  const base64 = canvasEl.toDataURL('image/jpeg', 0.92).split(',')[1];
   btnCapture.disabled = true;
   setEnrollStatus('Enrolling…', '');
 
   try {
-    const res = await fetch('/enroll', {
+    const res  = await fetch('/enroll', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ student_name: name, image_base64: base64 }),
@@ -686,19 +1038,14 @@ btnCapture.addEventListener('click', async () => {
       setEnrollStatus(`${json.message} (${json.face_count} sample(s) stored)`, 'ok');
       if (!students[name]) {
         students[name] = {
-          student_name: name,
-          emotion: 'neutral',
-          head_pose: 'forward',
-          attendance_status: 'Absent',
-          is_present: false,
-          active_alert: null,
-          last_seen: null,
+          student_name: name, emotion: 'neutral', head_pose: 'forward',
+          attendance_status: 'Absent', is_present: false, active_alert: null, last_seen: null,
         };
         updateCard(name, students[name]);
         refreshSummary();
       }
     } else {
-      setEnrollStatus(`${json.detail || 'Enrolment failed.'}`, 'err');
+      setEnrollStatus(json.detail || 'Enrolment failed.', 'err');
     }
   } catch (e) {
     setEnrollStatus(`Network error: ${e.message}`, 'err');
@@ -707,18 +1054,19 @@ btnCapture.addEventListener('click', async () => {
   }
 });
 
-/* ====================================================================
-   Boot
-==================================================================== */
+/* ── Boot ──────────────────────────────────────────────────────────────── */
 (async () => {
-  // Initial load (no flash on first paint)
+  // Load teacher name
+  try {
+    const res = await fetch('/me');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const { username } = await res.json();
+    document.getElementById('teacher-name').textContent = username;
+  } catch (_) {}
+
   await fetchAndApply(false);
-
-  // Connect WebSocket for instant push updates
   connectWS();
-
-  // Poll /students every 1 second as a reliable refresh layer
-  setInterval(() => fetchAndApply(true), 1000);
+  setInterval(() => fetchAndApply(true), 3000);
 })();
 </script>
 </body>

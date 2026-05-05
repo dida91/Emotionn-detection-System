@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Classroom Monitor — Login</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #222535;
+      --border:   #2e3250;
+      --text:     #e8eaf6;
+      --muted:    #8a8fb5;
+      --blue:     #3498db;
+      --blue-dim: rgba(52,152,219,.15);
+      --red:      #e74c3c;
+      --red-dim:  rgba(231,76,60,.15);
+      --green:    #2ecc71;
+      --radius:   12px;
+      --shadow:   0 4px 32px rgba(0,0,0,.55);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-wrapper {
+      width: 100%;
+      max-width: 420px;
+      padding: 24px;
+    }
+
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px 36px 36px;
+      box-shadow: var(--shadow);
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .login-header .logo {
+      font-size: 2.8rem;
+      display: block;
+      margin-bottom: 12px;
+    }
+    .login-header h1 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      letter-spacing: .3px;
+    }
+    .login-header h1 span { color: var(--blue); }
+    .login-header p {
+      font-size: .88rem;
+      color: var(--muted);
+    }
+
+    .login-error {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: var(--red-dim);
+      border: 1px solid rgba(231,76,60,.35);
+      border-radius: 8px;
+      color: #e87a6f;
+      font-size: .85rem;
+      font-weight: 600;
+      padding: 11px 14px;
+      margin-bottom: 22px;
+    }
+    .login-error.visible { display: flex; }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-bottom: 18px;
+    }
+    .field label {
+      font-size: .82rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: .4px;
+    }
+    .field input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: .95rem;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .field input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(52,152,219,.18);
+    }
+
+    .btn-login {
+      width: 100%;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+      margin-top: 6px;
+      letter-spacing: .3px;
+    }
+    .btn-login:hover { opacity: .88; transform: translateY(-1px); }
+    .btn-login:active { transform: translateY(0); }
+
+    .login-footer {
+      text-align: center;
+      margin-top: 22px;
+      font-size: .78rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-card">
+      <div class="login-header">
+        <span class="logo">🎓</span>
+        <h1>Classroom <span>Monitor</span></h1>
+        <p>Sign in to your teacher account</p>
+      </div>
+
+      <div id="login-error" class="login-error">
+        🔒 Incorrect username or password.
+      </div>
+
+      <form method="post" action="/login">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username"
+                 autocomplete="username" placeholder="e.g. teacher" required />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password"
+                 autocomplete="current-password" placeholder="••••••••••••" required />
+        </div>
+        <button type="submit" class="btn-login">Sign In →</button>
+      </form>
+
+      <p class="login-footer">Classroom Monitoring System</p>
+    </div>
+  </div>
+</body>
+</html>
