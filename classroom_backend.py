@@ -78,6 +78,22 @@ _SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 _TEACHER_USERNAME = os.environ.get("TEACHER_USERNAME", "teacher")
 _TEACHER_PASSWORD = os.environ.get("TEACHER_PASSWORD", "")
 
+if not _TEACHER_PASSWORD:
+    import warnings
+    warnings.warn(
+        "TEACHER_PASSWORD is not set. Login will be disabled until it is configured.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+
+if not os.environ.get("SECRET_KEY"):
+    import warnings
+    warnings.warn(
+        "SECRET_KEY is not set. A random key will be generated, invalidating sessions on restart.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+
 # ---------------------------------------------------------------------------
 # Pydantic request models
 # ---------------------------------------------------------------------------
@@ -318,7 +334,9 @@ async def do_login(
     password: str = Form(...),
 ):
     """Validate credentials and establish an authenticated session."""
-    if username == _TEACHER_USERNAME and password == _TEACHER_PASSWORD and _TEACHER_PASSWORD:
+    if not _TEACHER_PASSWORD:
+        raise HTTPException(status_code=503, detail="Authentication is not configured on this server.")
+    if username == _TEACHER_USERNAME and password == _TEACHER_PASSWORD:
         request.session["authenticated"] = True
         request.session["username"] = username
         return RedirectResponse("/", status_code=303)
@@ -493,7 +511,10 @@ async def dashboard_websocket(websocket: WebSocket):
     by the /update endpoint via _broadcast().
     """
     # Reject unauthenticated WebSocket connections.
-    if not websocket.session.get("authenticated"):
+    # Read the session from the ASGI scope directly, since SessionMiddleware
+    # sets scope["session"] for both HTTP and WebSocket connections.
+    session = websocket.scope.get("session", {})
+    if not session.get("authenticated"):
         await websocket.close(code=1008)
         return
 
