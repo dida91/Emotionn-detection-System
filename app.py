@@ -5,6 +5,10 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import cv2
 import numpy as np
 from flask import (
