@@ -197,7 +197,7 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
 
     Press ``q`` in the preview window to stop.
     """
-    capture = cv2.VideoCapture(camera_index)
+    capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not capture.isOpened():
         raise RuntimeError(f"Cannot open camera at index {camera_index}.")
 
@@ -209,6 +209,10 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
     print(f"[VideoProcessor] Camera index : {camera_index}")
     print(f"[VideoProcessor] Backend URL  : {backend_url}")
     print(f"[VideoProcessor] Known students: {list(known_encodings)}")
+
+    frame_count = 0
+    process_every_n_frames = 5
+    last_detections = []
 
     try:
         while True:
@@ -226,86 +230,93 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
                     print(f"[VideoProcessor] Reloaded — students: {list(known_encodings)}")
                 last_reload = now
 
-            # Downscale for faster detection.
-            small = cv2.resize(frame, (0, 0), fx=DETECTION_SCALE, fy=DETECTION_SCALE)
-            rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            if frame_count % process_every_n_frames == 0:
+                last_detections = []
+                # Downscale for faster detection.
+                small = cv2.resize(frame, (0, 0), fx=DETECTION_SCALE, fy=DETECTION_SCALE)
+                rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
-            face_locs  = face_recognition.face_locations(rgb_small, model="hog")
-            face_encs  = face_recognition.face_encodings(rgb_small, face_locs)
-            face_lands = face_recognition.face_landmarks(rgb_small, face_locs)
+                face_locs  = face_recognition.face_locations(rgb_small, model="hog")
+                face_encs  = face_recognition.face_encodings(rgb_small, face_locs)
+                face_lands = face_recognition.face_landmarks(rgb_small, face_locs)
 
-            for loc, enc, land in zip(face_locs, face_encs, face_lands):
-                name = _match_face(enc, known_encodings, RECOGNITION_TOLERANCE)
-                if name == "unknown":
-                    # Draw a grey box for unrecognised faces.
+                for loc, enc, land in zip(face_locs, face_encs, face_lands):
+                    name = _match_face(enc, known_encodings, RECOGNITION_TOLERANCE)
+                    if name == "unknown":
+                        last_detections.append({"loc": loc, "name": "unknown"})
+                        continue
+
+                    # Scale landmarks back to original frame coordinates.
+                    scale_inv = 1.0 / DETECTION_SCALE
+                    scaled_land = {
+                        feat: [(int(x * scale_inv), int(y * scale_inv)) for x, y in pts]
+                        for feat, pts in land.items()
+                    }
+
+                    head_pose = _estimate_head_pose(scaled_land, frame.shape)
+
+                    # Crop face for emotion detection.
                     top, right, bottom, left = [int(c / DETECTION_SCALE) for c in loc]
+                    face_crop = frame[top:bottom, left:right]
+                    if face_crop.size > 0:
+                        emotion, _, _ = emotion_model.predict_emotions(face_crop)
+                    else:
+                        emotion = "neutral"
+                        
+                    last_detections.append({
+                        "loc": loc, 
+                        "name": name, 
+                        "emotion": emotion, 
+                        "head_pose": head_pose
+                    })
+
+                    # Rate-limit updates per student.
+                    if now - last_update.get(name, 0.0) >= UPDATE_INTERVAL_SECONDS:
+                        last_update[name] = now
+                        # POST update to backend.
+                        try:
+                            requests.post(
+                                f"{backend_url}/update",
+                                json={
+                                    "student_name": name,
+                                    "emotion": emotion,
+                                    "head_pose": head_pose,
+                                    "timestamp": now,
+                                },
+                                timeout=2.0,
+                            )
+                        except requests.RequestException as exc:
+                            print(f"[VideoProcessor] Backend error: {exc}")
+
+            # Draw annotated bounding box and labels using last_detections.
+            for det in last_detections:
+                loc = det["loc"]
+                top, right, bottom, left = [int(c / DETECTION_SCALE) for c in loc]
+                
+                if det["name"] == "unknown":
                     cv2.rectangle(frame, (left, top), (right, bottom), (128, 128, 128), 1)
                     cv2.putText(
                         frame, "Unknown",
                         (left, max(20, top - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1,
                     )
-                    continue
-
-                # Rate-limit updates per student.
-                if now - last_update.get(name, 0.0) < UPDATE_INTERVAL_SECONDS:
-                    # Still draw the overlay even if we skip the HTTP update.
-                    top, right, bottom, left = [int(c / DETECTION_SCALE) for c in loc]
-                    state_text = name
-                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                    cv2.putText(
-                        frame, state_text,
-                        (left, max(20, top - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2,
-                    )
-                    continue
-
-                last_update[name] = now
-
-                # Scale landmarks back to original frame coordinates.
-                scale_inv = 1.0 / DETECTION_SCALE
-                scaled_land = {
-                    feat: [(int(x * scale_inv), int(y * scale_inv)) for x, y in pts]
-                    for feat, pts in land.items()
-                }
-
-                head_pose = _estimate_head_pose(scaled_land, frame.shape)
-
-                # Crop face for emotion detection.
-                top, right, bottom, left = [int(c / DETECTION_SCALE) for c in loc]
-                face_crop = frame[top:bottom, left:right]
-                if face_crop.size > 0:
-                    emotion, _, _ = emotion_model.predict_emotions(face_crop)
                 else:
-                    emotion = "neutral"
-
-                # POST update to backend.
-                try:
-                    requests.post(
-                        f"{backend_url}/update",
-                        json={
-                            "student_name": name,
-                            "emotion": emotion,
-                            "head_pose": head_pose,
-                            "timestamp": now,
-                        },
-                        timeout=2.0,
+                    name = det["name"]
+                    emotion = det["emotion"]
+                    head_pose = det["head_pose"]
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 220, 0), 2)
+                    cv2.putText(
+                        frame,
+                        f"{name}: {emotion} [{head_pose}]",
+                        (left, max(20, top - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 2,
                     )
-                except requests.RequestException as exc:
-                    print(f"[VideoProcessor] Backend error: {exc}")
-
-                # Draw annotated bounding box and labels.
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 220, 0), 2)
-                cv2.putText(
-                    frame,
-                    f"{name}: {emotion} [{head_pose}]",
-                    (left, max(20, top - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 2,
-                )
 
             cv2.imshow("Classroom Monitor  (press q to quit)", frame)
             if cv2.waitKey(1) == ord("q"):
                 break
+                
+            frame_count += 1
 
     finally:
         capture.release()

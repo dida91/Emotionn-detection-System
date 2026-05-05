@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Classroom Monitoring Dashboard</title>
   <style>
-    /* ---------------------------------------------------------------
-       Reset & base
-    --------------------------------------------------------------- */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
@@ -58,6 +55,35 @@
     }
     header h1 span { color: var(--blue); }
 
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* Refresh indicator */
+    #refresh-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: .78rem;
+      color: var(--text-muted);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 10px;
+    }
+    #refresh-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      animation: pulse-blue 1s ease-in-out infinite;
+    }
+    @keyframes pulse-blue {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: .4; transform: scale(.75); }
+    }
+
     #ws-status {
       display: flex;
       align-items: center;
@@ -84,6 +110,7 @@
       border-bottom: 1px solid var(--border);
       font-size: .85rem;
       flex-wrap: wrap;
+      align-items: center;
     }
     .summary-chip {
       display: flex;
@@ -97,6 +124,14 @@
     .chip-away     { background: rgba(243,156,18,.15);  color: var(--orange); }
     .chip-absent   { background: rgba(142,150,181,.1);  color: var(--text-muted); }
     .chip-alert    { background: rgba(231,76,60,.15);   color: var(--red); }
+
+    /* Last-updated timestamp */
+    #last-updated {
+      margin-left: auto;
+      font-size: .75rem;
+      color: var(--text-muted);
+    }
+    #last-updated span { color: var(--text); font-weight: 600; }
 
     /* ---------------------------------------------------------------
        Main layout
@@ -150,8 +185,16 @@
     .student-card.present::before  { background: var(--green); }
     .student-card.away::before     { background: var(--orange); }
     .student-card.absent::before   { background: var(--text-muted); }
-    .student-card.alert-distress::before { background: var(--alert-red); }
+    .student-card.alert-distress::before   { background: var(--alert-red); }
     .student-card.alert-engagement::before { background: var(--alert-yellow); }
+
+    /* Flash animation when card data refreshes */
+    @keyframes card-refresh {
+      0%   { background: var(--surface); }
+      30%  { background: rgba(52,152,219,.08); }
+      100% { background: var(--surface); }
+    }
+    .student-card.refreshing { animation: card-refresh .5s ease-out; }
 
     .student-name {
       font-size: 1rem;
@@ -212,8 +255,8 @@
       margin-top: 4px;
     }
     .alert-banner.visible { display: flex; }
-    .alert-distress-banner  { background: rgba(192,57,43,.25);  color: #e87a6f; border: 1px solid rgba(192,57,43,.4); }
-    .alert-engagement-banner{ background: rgba(212,172,13,.2);  color: #e8c93e; border: 1px solid rgba(212,172,13,.35); }
+    .alert-distress-banner   { background: rgba(192,57,43,.25);  color: #e87a6f; border: 1px solid rgba(192,57,43,.4); }
+    .alert-engagement-banner { background: rgba(212,172,13,.2);  color: #e8c93e; border: 1px solid rgba(212,172,13,.35); }
 
     .last-seen {
       font-size: .68rem;
@@ -293,7 +336,7 @@
       max-width: 400px;
       border-radius: 6px;
       background: #000;
-      transform: scaleX(-1); /* mirror for natural feel */
+      transform: scaleX(-1);
     }
 
     #enroll-canvas { display: none; }
@@ -328,9 +371,15 @@
 <!-- ------------------------------------------------------------------ Header -->
 <header>
   <h1>🎓 Classroom <span>Monitor</span></h1>
-  <div id="ws-status">
-    <div id="ws-dot"></div>
-    <span id="ws-label">Connecting…</span>
+  <div class="header-right">
+    <div id="refresh-indicator">
+      <div id="refresh-dot"></div>
+      <span>Auto-refresh: 1s</span>
+    </div>
+    <div id="ws-status">
+      <div id="ws-dot"></div>
+      <span id="ws-label">Connecting…</span>
+    </div>
   </div>
 </header>
 
@@ -340,6 +389,7 @@
   <div class="summary-chip chip-away">🟠 Away: <span id="count-away">0</span></div>
   <div class="summary-chip chip-absent">⚫ Absent: <span id="count-absent">0</span></div>
   <div class="summary-chip chip-alert">🔴 Alerts: <span id="count-alert">0</span></div>
+  <div id="last-updated">Last updated: <span id="last-updated-time">—</span></div>
 </div>
 
 <main>
@@ -363,7 +413,7 @@
         Student name
         <input type="text" id="enroll-name" placeholder="e.g. Alice" maxlength="80" />
       </label>
-      <button id="btn-open-camera">📷 Open Camera</button>
+      <button id="btn-open-camera">Open Camera</button>
     </div>
 
     <div id="enroll-video-container">
@@ -406,11 +456,13 @@ function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+function nowTimeString() {
+  return new Date().toLocaleTimeString();
+}
+
 /* ====================================================================
    State
 ==================================================================== */
-// students: { [name]: { emotion, head_pose, attendance_status, is_present,
-//                        active_alert, last_seen } }
 const students = {};
 
 /* ====================================================================
@@ -442,7 +494,7 @@ function getOrCreateCard(name) {
   return card;
 }
 
-function updateCard(name, data) {
+function updateCard(name, data, flash = false) {
   const card = getOrCreateCard(name);
 
   const status = (data.attendance_status || 'Absent').toLowerCase();
@@ -460,6 +512,12 @@ function updateCard(name, data) {
     card.classList.add(status === 'present' ? 'present' : status === 'away' ? 'away' : 'absent');
   }
 
+  // Subtle flash to signal the 1-second refresh fired
+  if (flash) {
+    card.classList.add('refreshing');
+    card.addEventListener('animationend', () => card.classList.remove('refreshing'), { once: true });
+  }
+
   // Status badge
   const badge = card.querySelector('.status-badge');
   badge.className = `status-badge status-${status}`;
@@ -473,8 +531,8 @@ function updateCard(name, data) {
   card.querySelector('.head-pose-label span').textContent = HEAD_POSE_LABEL[pose] || pose;
 
   // Alert banners
-  const distressBanner   = card.querySelector('.alert-distress-banner');
-  const engageBanner     = card.querySelector('.alert-engagement-banner');
+  const distressBanner = card.querySelector('.alert-distress-banner');
+  const engageBanner   = card.querySelector('.alert-engagement-banner');
   distressBanner.classList.toggle('visible', alert === 'Emotional Distress');
   engageBanner.classList.toggle('visible',   alert === 'Low Engagement');
 
@@ -497,19 +555,21 @@ function refreshSummary() {
 }
 
 /* ====================================================================
-   Fetch initial snapshot
+   Fetch / poll helpers
 ==================================================================== */
-async function fetchInitialState() {
+async function fetchAndApply(flash = false) {
   try {
     const res = await fetch('/students');
     if (!res.ok) return;
     const list = await res.json();
     for (const s of list) {
       students[s.student_name] = s;
-      updateCard(s.student_name, s);
+      updateCard(s.student_name, s, flash);
     }
     refreshSummary();
-  } catch (_) { /* ignore — WS will provide data */ }
+    // Update "last updated" timestamp
+    document.getElementById('last-updated-time').textContent = nowTimeString();
+  } catch (_) { /* silently ignore network errors */ }
 }
 
 /* ====================================================================
@@ -532,9 +592,7 @@ function connectWS() {
     let data;
     try { data = JSON.parse(ev.data); } catch (_) { return; }
 
-    // Ignore enrollment-only events that carry no student state.
     if (data.event === 'enrolled' && !data.attendance_status) {
-      // Just ensure the card exists.
       getOrCreateCard(data.student_name);
       return;
     }
@@ -542,10 +600,10 @@ function connectWS() {
     const name = data.student_name;
     if (!name) return;
 
-    // Merge into local state.
     students[name] = { ...(students[name] || {}), ...data };
     updateCard(name, students[name]);
     refreshSummary();
+    document.getElementById('last-updated-time').textContent = nowTimeString();
   });
 
   ws.addEventListener('close', () => {
@@ -563,14 +621,14 @@ function connectWS() {
 ==================================================================== */
 let cameraStream = null;
 
-const btnOpenCamera   = document.getElementById('btn-open-camera');
-const btnCloseCamera  = document.getElementById('btn-close-camera');
-const btnCapture      = document.getElementById('btn-capture');
-const videoContainer  = document.getElementById('enroll-video-container');
-const videoEl         = document.getElementById('enroll-video');
-const canvasEl        = document.getElementById('enroll-canvas');
-const statusEl        = document.getElementById('enroll-status');
-const nameInput       = document.getElementById('enroll-name');
+const btnOpenCamera  = document.getElementById('btn-open-camera');
+const btnCloseCamera = document.getElementById('btn-close-camera');
+const btnCapture     = document.getElementById('btn-capture');
+const videoContainer = document.getElementById('enroll-video-container');
+const videoEl        = document.getElementById('enroll-video');
+const canvasEl       = document.getElementById('enroll-canvas');
+const statusEl       = document.getElementById('enroll-status');
+const nameInput      = document.getElementById('enroll-name');
 
 function setEnrollStatus(msg, type) {
   statusEl.textContent = msg;
@@ -585,7 +643,7 @@ btnOpenCamera.addEventListener('click', async () => {
     videoEl.srcObject = cameraStream;
     videoContainer.classList.add('visible');
     btnOpenCamera.disabled = true;
-    setEnrollStatus('Camera ready. Position the student's face and click Capture.', '');
+    setEnrollStatus("Camera ready. Position the student's face and click Capture.", '');
   } catch (e) {
     setEnrollStatus(`Camera error: ${e.message}`, 'err');
   }
@@ -604,18 +662,15 @@ btnCapture.addEventListener('click', async () => {
   if (!name) { setEnrollStatus('Student name is required.', 'err'); return; }
   if (!cameraStream) { setEnrollStatus('Camera is not open.', 'err'); return; }
 
-  // Draw current video frame onto the hidden canvas.
   canvasEl.width  = videoEl.videoWidth  || 640;
   canvasEl.height = videoEl.videoHeight || 480;
   const ctx = canvasEl.getContext('2d');
-  // Undo the CSS mirror so the image is not flipped for the backend.
   ctx.translate(canvasEl.width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(videoEl, 0, 0);
 
   const dataURL = canvasEl.toDataURL('image/jpeg', 0.92);
-  // Strip the data-URL prefix to get raw base64.
-  const base64 = dataURL.split(',')[1];
+  const base64  = dataURL.split(',')[1];
 
   btnCapture.disabled = true;
   setEnrollStatus('Enrolling…', '');
@@ -628,8 +683,7 @@ btnCapture.addEventListener('click', async () => {
     });
     const json = await res.json();
     if (res.ok) {
-      setEnrollStatus(`✅ ${json.message}  (${json.face_count} sample(s) stored)`, 'ok');
-      // Ensure a card exists for the new student.
+      setEnrollStatus(`${json.message} (${json.face_count} sample(s) stored)`, 'ok');
       if (!students[name]) {
         students[name] = {
           student_name: name,
@@ -644,10 +698,10 @@ btnCapture.addEventListener('click', async () => {
         refreshSummary();
       }
     } else {
-      setEnrollStatus(`❌ ${json.detail || 'Enrolment failed.'}`, 'err');
+      setEnrollStatus(`${json.detail || 'Enrolment failed.'}`, 'err');
     }
   } catch (e) {
-    setEnrollStatus(`❌ Network error: ${e.message}`, 'err');
+    setEnrollStatus(`Network error: ${e.message}`, 'err');
   } finally {
     btnCapture.disabled = false;
   }
@@ -657,8 +711,14 @@ btnCapture.addEventListener('click', async () => {
    Boot
 ==================================================================== */
 (async () => {
-  await fetchInitialState();
+  // Initial load (no flash on first paint)
+  await fetchAndApply(false);
+
+  // Connect WebSocket for instant push updates
   connectWS();
+
+  // Poll /students every 1 second as a reliable refresh layer
+  setInterval(() => fetchAndApply(true), 1000);
 })();
 </script>
 </body>

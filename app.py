@@ -37,7 +37,7 @@ if secret_key and app_env == "production" and len(secret_key) < 32:
 app.config["SECRET_KEY"] = secret_key or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/emotion_detection",
+    "postgresql://student_emotion_detection_user:tP2lhxqzusyyICSgvqutgalSWJ36Sg8V@dpg-d7m76t2qqhas73f7209g-a.oregon-postgres.render.com/student_emotion_detection",
 )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -76,7 +76,7 @@ emotion_model = EmotionModel()
 
 def _ensure_default_teacher() -> None:
     username = os.environ.get("TEACHER_USERNAME", "teacher")
-    password = os.environ.get("TEACHER_PASSWORD")
+    password = os.environ.get("TEACHER_PASSWORD","didadhunganasaki")
     if not password:
         raise RuntimeError("TEACHER_PASSWORD must be set before starting the app.")
     if len(password) < 12:
