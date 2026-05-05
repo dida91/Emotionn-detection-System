@@ -496,6 +496,46 @@ async def get_students(request: Request):
     return result
 
 
+@app.delete("/students/{student_name}")
+async def remove_student(student_name: str, request: Request):
+    """
+    Remove a specific enrolled student.
+
+    Deletes all stored face encodings and runtime state for the named student,
+    persists the change to disk, and broadcasts a removal event to the dashboard.
+    """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if student_name not in enrolled_encodings:
+        raise HTTPException(status_code=404, detail=f"Student '{student_name}' not found.")
+
+    enrolled_encodings.pop(student_name, None)
+    student_states.pop(student_name, None)
+    save_encodings()
+
+    await _broadcast({"event": "removed", "student_name": student_name})
+    return {"message": f"Student '{student_name}' removed successfully."}
+
+
+@app.delete("/students")
+async def remove_all_students(request: Request):
+    """
+    Remove all enrolled students.
+
+    Clears every face encoding and runtime state entry, persists the change to
+    disk, and broadcasts a removal event to the dashboard.
+    """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    enrolled_encodings.clear()
+    student_states.clear()
+    save_encodings()
+
+    await _broadcast({"event": "removed_all"})
+    return {"message": "All students removed successfully."}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
