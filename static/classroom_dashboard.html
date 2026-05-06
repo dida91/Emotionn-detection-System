@@ -924,6 +924,9 @@ const HEAD_POSE_LABEL = {
   forward:'● Facing forward', left:'← Looking left',
   right:'→ Looking right', down:'↓ Looking down',
 };
+// Engagement score thresholds (0–100) — must match backend DISENGAGED_THRESHOLD logic.
+const ENGAGE_HIGH = 60;   // >= ENGAGE_HIGH → good (green)
+const ENGAGE_MID  = 35;   // >= ENGAGE_MID  → warn (orange); < ENGAGE_MID → bad (red)
 
 /* ── State ─────────────────────────────────────────────────────────────── */
 const students = {};
@@ -1008,7 +1011,7 @@ function refreshSummary() {
 
   const bar = document.getElementById('engage-bar');
   bar.style.width = engagePct + '%';
-  bar.className = 'progress-fill' + (engagePct >= 60 ? ' good' : engagePct >= 35 ? ' warn' : ' bad');
+  bar.className = 'progress-fill' + (engagePct >= ENGAGE_HIGH ? ' good' : engagePct >= ENGAGE_MID ? ' warn' : ' bad');
 
   // Alert strip
   const alertStudents = Object.values(students).filter(s =>
@@ -1160,7 +1163,7 @@ function updateCard(name, data, doFlash = false) {
 
   // Engagement bar
   const engFill = card.querySelector('.engage-fill');
-  const engClass = engage >= 60 ? 'high' : engage >= 35 ? 'mid' : 'low';
+  const engClass = engage >= ENGAGE_HIGH ? 'high' : engage >= ENGAGE_MID ? 'mid' : 'low';
   engFill.style.width = engage + '%';
   engFill.className = `engage-fill ${engClass}`;
   card.querySelector('.engage-score').textContent = engage + '%';

@@ -126,6 +126,11 @@ _EYE_ENGAGE: dict[str, float] = {
     "closed":   0.0,
 }
 
+# Weights for the weighted engagement formula (must sum to 1.0).
+EMOTION_WEIGHT = 0.35
+POSE_WEIGHT    = 0.45
+EYE_WEIGHT     = 0.20
+
 # Exponential moving-average smoothing factor (lower → smoother).
 ENGAGEMENT_SMOOTH_ALPHA = 0.3
 
@@ -188,27 +193,27 @@ class AttendanceRecord(_Base):
 
 def _init_db() -> None:
     """Create all tables if they don't exist yet, and apply lightweight migrations."""
+    from sqlalchemy.exc import OperationalError
+    import warnings
+
     _Base.metadata.create_all(bind=_engine)
     # Add total_time_present column for databases created before this migration.
-    # If the column already exists most DBMS raise an error; we catch and ignore
-    # only that specific case, letting any other errors propagate.
+    # OperationalError is raised by SQLite ("duplicate column") and PostgreSQL
+    # ("column … already exists") when the column is already present.
     try:
         with _engine.connect() as conn:
             conn.execute(text(
                 "ALTER TABLE classroom_attendance ADD COLUMN total_time_present REAL DEFAULT 0.0"
             ))
             conn.commit()
+    except OperationalError:
+        pass  # Column already exists — safe to ignore.
     except Exception as exc:
-        # Column already exists (most common case) or a genuine SQL error.
-        # Log a warning rather than silently ignoring the exception so that
-        # unexpected failures are visible during development.
-        import warnings
-        if "already exists" not in str(exc).lower() and "duplicate column" not in str(exc).lower():
-            warnings.warn(
-                f"DB migration warning (total_time_present): {exc}",
-                RuntimeWarning,
-                stacklevel=1,
-            )
+        warnings.warn(
+            f"DB migration warning (total_time_present): {exc}",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +418,9 @@ def _compute_engagement_score(
     then applies exponential moving-average smoothing to prevent flickering.
     """
     raw = (
-        0.35 * _EMOTION_ENGAGE.get(emotion, 55.0)
-        + 0.45 * _POSE_ENGAGE.get(head_pose, 100.0)
-        + 0.20 * _EYE_ENGAGE.get(eye_state, 100.0)
+        EMOTION_WEIGHT * _EMOTION_ENGAGE.get(emotion, 55.0)
+        + POSE_WEIGHT    * _POSE_ENGAGE.get(head_pose, 100.0)
+        + EYE_WEIGHT     * _EYE_ENGAGE.get(eye_state, 100.0)
     )
     smoothed = ENGAGEMENT_SMOOTH_ALPHA * raw + (1.0 - ENGAGEMENT_SMOOTH_ALPHA) * previous_score
     return round(min(100.0, max(0.0, smoothed)), 1)
