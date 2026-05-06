@@ -1415,12 +1415,12 @@ function fmtDuration(secs) {
 }
 
 async function loadAttendance(dateVal) {
-  attendanceTbody.innerHTML = '<tr><td colspan="6" id="attendance-empty">Loading…</td></tr>';
+  attendanceTbody.innerHTML = '<tr><td colspan="7" id="attendance-empty">Loading…</td></tr>';
   try {
     const url = dateVal ? `/attendance?date=${encodeURIComponent(dateVal)}` : '/attendance';
     const res = await fetch(url);
     if (res.status === 401) { window.location.href = '/login'; return; }
-    if (!res.ok) { attendanceTbody.innerHTML = '<tr><td colspan="6">Failed to load data.</td></tr>'; return; }
+    if (!res.ok) { attendanceTbody.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>'; return; }
     const { records, available_dates } = await res.json();
 
     // Rebuild the date selector
@@ -1435,7 +1435,7 @@ async function loadAttendance(dateVal) {
     }
 
     if (!records || records.length === 0) {
-      attendanceTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);font-style:italic;padding:20px;">No attendance records for this date.</td></tr>';
+      attendanceTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);font-style:italic;padding:20px;">No attendance records for this date.</td></tr>';
       return;
     }
 
@@ -1456,7 +1456,7 @@ async function loadAttendance(dateVal) {
       </tr>`;
     }).join('');
   } catch (e) {
-    attendanceTbody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(e.message)}</td></tr>`;
+    attendanceTbody.innerHTML = `<tr><td colspan="7">Error: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 

@@ -86,7 +86,9 @@ DISTRACTED_THRESHOLD_SECONDS = 10
 DISENGAGED_THRESHOLD_SECONDS = 15
 
 # 'Fatigue': eyes closed or drowsy for this many continuous seconds.
-FATIGUE_THRESHOLD_SECONDS = 3
+# A 5-second threshold avoids false positives from prolonged blinks or
+# brief head tilts, while still catching genuine drowsiness.
+FATIGUE_THRESHOLD_SECONDS = 5
 
 # 'Emotional Distress' (legacy): sustained sad/angry emotion.
 DISTRESS_THRESHOLD_SECONDS = 20 * 60   # 20 minutes
@@ -188,14 +190,25 @@ def _init_db() -> None:
     """Create all tables if they don't exist yet, and apply lightweight migrations."""
     _Base.metadata.create_all(bind=_engine)
     # Add total_time_present column for databases created before this migration.
+    # If the column already exists most DBMS raise an error; we catch and ignore
+    # only that specific case, letting any other errors propagate.
     try:
         with _engine.connect() as conn:
             conn.execute(text(
                 "ALTER TABLE classroom_attendance ADD COLUMN total_time_present REAL DEFAULT 0.0"
             ))
             conn.commit()
-    except Exception:
-        pass  # Column already exists or engine doesn't support this syntax.
+    except Exception as exc:
+        # Column already exists (most common case) or a genuine SQL error.
+        # Log a warning rather than silently ignoring the exception so that
+        # unexpected failures are visible during development.
+        import warnings
+        if "already exists" not in str(exc).lower() and "duplicate column" not in str(exc).lower():
+            warnings.warn(
+                f"DB migration warning (total_time_present): {exc}",
+                RuntimeWarning,
+                stacklevel=1,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +375,7 @@ def _init_student_state(name: str) -> None:
         "first_seen": None,
         "is_present": False,
         "total_time_present": 0.0,   # seconds present in this session
+        "_last_db_write": 0.0,       # Unix timestamp of last DB upsert
         # Alerts — list of currently active alert names.
         "active_alerts": [],
         # Backward-compat single alert string (first active alert, or None).
@@ -768,6 +782,7 @@ async def update_student(update: StudentUpdate):
     att_pct = _attendance_percentage(name, now)
 
     # --- Persist attendance to database -----------------------------------
+    _DB_WRITE_INTERVAL = 30.0  # seconds between periodic DB writes
     if not was_present:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
@@ -777,8 +792,9 @@ async def update_student(update: StudentUpdate):
                 name, "Present", now, state["total_time_present"],
             ),
         )
-    elif int(now) % 30 == 0:
-        # Periodically persist total_time_present even while student stays present.
+        state["_last_db_write"] = now
+    elif now - state["_last_db_write"] >= _DB_WRITE_INTERVAL:
+        # Periodically persist total_time_present while student remains present.
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
@@ -787,6 +803,7 @@ async def update_student(update: StudentUpdate):
                 name, "Present", now, state["total_time_present"],
             ),
         )
+        state["_last_db_write"] = now
 
     # --- Broadcast to dashboard ------------------------------------------
     await _broadcast({
@@ -995,6 +1012,7 @@ async def reset_session(request: Request):
         state["_eyes_closed_since"] = None
         state["emotion_history"].clear()
         state["head_pose_history"].clear()
+        state["_last_db_write"] = 0.0
 
     await _broadcast({"event": "session_reset"})
     return {"message": "Session reset successfully.", "session_start": _session_start_time}
