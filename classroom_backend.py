@@ -23,6 +23,8 @@ import asyncio
 import base64
 import json
 import os
+import csv
+import io
 import secrets
 import time
 from collections import deque
@@ -38,17 +40,19 @@ import numpy as np
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     Integer,
     String,
     UniqueConstraint,
     create_engine,
+    text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -67,27 +71,77 @@ ENCODINGS_FILE = "face_encodings.json"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Student marked 'Away' when not seen for this many seconds.
-AWAY_THRESHOLD_SECONDS = 5 * 60        # 5 minutes
+# 30 seconds provides a stable window that absorbs brief occlusions,
+# head-turns, and short network delays without too-frequent status changes.
+AWAY_THRESHOLD_SECONDS = 30
 
-# 'Emotional Distress' alert fires after this many continuous seconds of
-# sad/angry emotion.
+# Maximum elapsed time (seconds) counted per update interval to avoid
+# crediting long gaps (e.g. video pauses) to total_time_present.
+MAX_UPDATE_GAP = 10.0
+
+# --- Alert thresholds -------------------------------------------------------
+
+# 'Distracted': student not facing forward for this many continuous seconds.
+# 20 seconds allows brief note-taking or thinking without triggering an alert.
+DISTRACTED_THRESHOLD_SECONDS = 20
+
+# 'Disengaged': engagement score below this threshold for DISENGAGED_THRESHOLD_SECONDS.
+DISENGAGED_ENGAGEMENT_THRESHOLD = 40
+
+# 'Disengaged': engagement score below DISENGAGED_ENGAGEMENT_THRESHOLD for this many seconds.
+DISENGAGED_THRESHOLD_SECONDS = 15
+
+# 'Fatigue': eyes closed or drowsy for this many continuous seconds.
+# A 5-second threshold avoids false positives from prolonged blinks or
+# brief head tilts, while still catching genuine drowsiness.
+FATIGUE_THRESHOLD_SECONDS = 5
+
+# 'Emotional Distress' (legacy): sustained sad/angry emotion.
 DISTRESS_THRESHOLD_SECONDS = 20 * 60   # 20 minutes
 
-# 'Low Engagement' alert fires after this many continuous seconds of the
-# student looking away AND showing neutral emotion.
-ENGAGEMENT_THRESHOLD_SECONDS = 2 * 60  # 2 minutes
+# Minimum seconds between two firings of the same alert for a student.
+ALERT_COOLDOWN_SECONDS = 60
+
+# Interval (seconds) between periodic DB writes while a student stays present.
+DB_WRITE_INTERVAL_SECONDS = 30.0
 
 # Keep up to this much emotion/pose history per student.
-# Must be at least as large as DISTRESS_THRESHOLD_SECONDS so that alert
-# evaluation always has enough data when the threshold is reached.
 HISTORY_WINDOW_SECONDS = 25 * 60       # 25 minutes
 
 # Emotions that can trigger the Emotional Distress alert.
 DISTRESS_EMOTIONS = {"sad", "angry"}
 
-# Emotions and head poses that contribute to the Low Engagement alert.
-DISENGAGED_EMOTIONS = {"neutral"}
-DISENGAGED_POSES = {"left", "right", "down"}
+# --- Engagement score weights -----------------------------------------------
+
+# Contribution of each signal to the 0–100 engagement score.
+_EMOTION_ENGAGE: dict[str, float] = {
+    "happy":     90.0,
+    "surprised": 75.0,
+    "neutral":   55.0,
+    "fear":      25.0,
+    "sad":       25.0,
+    "disgust":   20.0,
+    "angry":     20.0,
+}
+_POSE_ENGAGE: dict[str, float] = {
+    "forward": 100.0,
+    "down":     35.0,
+    "left":     20.0,
+    "right":    20.0,
+}
+_EYE_ENGAGE: dict[str, float] = {
+    "open":   100.0,
+    "drowsy":  50.0,
+    "closed":   0.0,
+}
+
+# Weights for the weighted engagement formula (must sum to 1.0).
+EMOTION_WEIGHT = 0.35
+POSE_WEIGHT    = 0.45
+EYE_WEIGHT     = 0.20
+
+# Exponential moving-average smoothing factor (lower → smoother).
+ENGAGEMENT_SMOOTH_ALPHA = 0.3
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -138,6 +192,8 @@ class AttendanceRecord(_Base):
     status       = Column(String(20), nullable=False, default="Absent")
     first_seen   = Column(DateTime(timezone=True), nullable=True)
     last_seen    = Column(DateTime(timezone=True), nullable=True)
+    # Total seconds the student was present during the day.
+    total_time_present = Column(Float, nullable=True, default=0.0)
 
     __table_args__ = (
         UniqueConstraint("student_name", "date", name="uq_classroom_student_date"),
@@ -145,8 +201,33 @@ class AttendanceRecord(_Base):
 
 
 def _init_db() -> None:
-    """Create all tables if they don't exist yet."""
+    """Create all tables if they don't exist yet, and apply lightweight migrations."""
+    from sqlalchemy.exc import OperationalError
+    import warnings
+
     _Base.metadata.create_all(bind=_engine)
+    # Add total_time_present column for databases created before this migration.
+    # OperationalError is raised by SQLite ("duplicate column") and PostgreSQL
+    # ("column … already exists") when the column is already present.
+    try:
+        with _engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE classroom_attendance ADD COLUMN total_time_present REAL DEFAULT 0.0"
+            ))
+            conn.commit()
+    except OperationalError as exc:
+        # Most likely the column already exists (normal on subsequent startups).
+        # Log at debug level so developers can distinguish this from real errors.
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "Migration: total_time_present column may already exist (%s)", exc
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"DB migration warning (total_time_present): {exc}",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +235,18 @@ def _init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _db_upsert_attendance(student_name: str, status: str, ts: float) -> None:
+def _db_upsert_attendance(
+    student_name: str,
+    status: str,
+    ts: float,
+    total_time_present: float = 0.0,
+) -> None:
     """
     Insert or update today's attendance record for *student_name*.
 
-    If the record doesn't exist yet it is created; otherwise only *status*
-    and *last_seen* (and *first_seen* when transitioning to Present for the
-    first time) are updated.
+    If the record doesn't exist yet it is created; otherwise only *status*,
+    *last_seen*, *total_time_present* (and *first_seen* on first Present
+    transition) are updated.
     """
     today = datetime.fromtimestamp(ts, tz=timezone.utc).date()
     dt_now = datetime.fromtimestamp(ts, tz=timezone.utc)
@@ -177,6 +263,7 @@ def _db_upsert_attendance(student_name: str, status: str, ts: float) -> None:
                 status=status,
                 first_seen=dt_now if status == "Present" else None,
                 last_seen=dt_now if status == "Present" else None,
+                total_time_present=total_time_present,
             )
             session.add(record)
         else:
@@ -184,6 +271,7 @@ def _db_upsert_attendance(student_name: str, status: str, ts: float) -> None:
             record.last_seen = dt_now if status in ("Present", "Away") else record.last_seen
             if status == "Present" and record.first_seen is None:
                 record.first_seen = dt_now
+            record.total_time_present = total_time_present
         session.commit()
 
 
@@ -210,6 +298,7 @@ def _db_get_attendance(filter_date: Optional[date_cls] = None) -> list[dict]:
                 "status": r.status,
                 "first_seen": r.first_seen.isoformat() if r.first_seen else None,
                 "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+                "total_time_present": r.total_time_present or 0.0,
             }
             for r in rows
         ]
@@ -231,6 +320,7 @@ class StudentUpdate(BaseModel):
     student_name: str
     emotion: str
     head_pose: str      # "forward" | "left" | "right" | "down"
+    eye_state: str = "open"   # "open" | "drowsy" | "closed"
     timestamp: float    # Unix epoch seconds
 
 
@@ -255,6 +345,9 @@ student_states: dict[str, dict] = {}
 
 # Active WebSocket connections to the dashboard.
 connected_clients: list[WebSocket] = []
+
+# Unix timestamp when the current monitoring session began.
+_session_start_time: float = time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -289,12 +382,31 @@ def save_encodings() -> None:
 def _init_student_state(name: str) -> None:
     """Initialise the runtime state entry for a student."""
     student_states[name] = {
+        # Current sensor readings
         "emotion": "neutral",
         "head_pose": "forward",
+        "eye_state": "open",
+        # Engagement score 0–100, initialised to a neutral baseline.
+        "engagement_score": 60.0,
+        # Attendance
         "attendance_status": "Absent",
         "last_seen": None,
+        "first_seen": None,
         "is_present": False,
+        "total_time_present": 0.0,   # seconds present in this session
+        "_last_db_write": 0.0,       # Unix timestamp of last DB upsert
+        # Alerts — list of currently active alert names.
+        "active_alerts": [],
+        # Backward-compat single alert string (first active alert, or None).
         "active_alert": None,
+        # Alert history: list of {"type": str, "timestamp": float}
+        "alert_history": [],
+        # Per-alert last-fired timestamps (for cooldown logic).
+        "_last_alert_time": {},
+        # Condition onset timestamps used by alert evaluation.
+        "_not_forward_since": None,
+        "_low_engagement_since": None,
+        "_eyes_closed_since": None,
         # Bounded deques prevent unbounded memory growth.
         "emotion_history": deque(maxlen=50_000),
         "head_pose_history": deque(maxlen=50_000),
@@ -307,19 +419,85 @@ def _trim_history(history: deque, max_age: float, now: float) -> None:
         history.popleft()
 
 
-def _check_alerts(name: str, now: float) -> Optional[str]:
+def _compute_engagement_score(
+    emotion: str,
+    head_pose: str,
+    eye_state: str,
+    previous_score: float,
+) -> float:
     """
-    Evaluate alert conditions and return the highest-priority active alert
-    name, or None if no alert is currently active.
+    Compute a smoothed engagement score (0–100) from the three input signals.
+
+    Uses a weighted combination of emotion, head-pose, and eye-state scores,
+    then applies exponential moving-average smoothing to prevent flickering.
+    """
+    raw = (
+        EMOTION_WEIGHT * _EMOTION_ENGAGE.get(emotion, 55.0)
+        + POSE_WEIGHT    * _POSE_ENGAGE.get(head_pose, 100.0)
+        + EYE_WEIGHT     * _EYE_ENGAGE.get(eye_state, 100.0)
+    )
+    smoothed = ENGAGEMENT_SMOOTH_ALPHA * raw + (1.0 - ENGAGEMENT_SMOOTH_ALPHA) * previous_score
+    return round(min(100.0, max(0.0, smoothed)), 1)
+
+
+def _evaluate_alerts(name: str, now: float) -> tuple[list[str], Optional[str]]:
+    """
+    Evaluate all alert conditions for *name* and update the state in-place.
+
+    Returns a ``(active_alerts, primary_alert)`` tuple where *active_alerts*
+    is a list of currently firing alert names and *primary_alert* is the
+    highest-priority one (or None).
+
+    Alert types (priority order):
+      1. Fatigue       – eyes closed/drowsy for > FATIGUE_THRESHOLD_SECONDS
+      2. Distracted    – not facing forward for > DISTRACTED_THRESHOLD_SECONDS
+      3. Disengaged    – engagement < 40 for > DISENGAGED_THRESHOLD_SECONDS
+      4. Emotional Distress – sustained sad/angry emotion (legacy)
     """
     state = student_states[name]
-    emotion_hist = state["emotion_history"]
-    pose_hist = state["head_pose_history"]
+    active: list[str] = []
 
-    # -- Emotional Distress -----------------------------------------------
-    # All emotion samples in the last DISTRESS_THRESHOLD_SECONDS window must
-    # be 'sad' or 'angry', AND the window must be at least
-    # DISTRESS_THRESHOLD_SECONDS wide (so it does not fire immediately).
+    def _fire(alert_type: str) -> bool:
+        """Return True and record the alert if not in cooldown."""
+        last = state["_last_alert_time"].get(alert_type, 0.0)
+        if now - last >= ALERT_COOLDOWN_SECONDS:
+            state["_last_alert_time"][alert_type] = now
+            state["alert_history"].append({"type": alert_type, "timestamp": now})
+            return True
+        return False
+
+    # --- Fatigue: eyes closed or drowsy ------------------------------------
+    if state["eye_state"] in ("closed", "drowsy"):
+        if state["_eyes_closed_since"] is None:
+            state["_eyes_closed_since"] = now
+        elif now - state["_eyes_closed_since"] >= FATIGUE_THRESHOLD_SECONDS:
+            if _fire("Fatigue"):
+                active.append("Fatigue")
+    else:
+        state["_eyes_closed_since"] = None
+
+    # --- Distracted: head not facing forward --------------------------------
+    if state["head_pose"] != "forward":
+        if state["_not_forward_since"] is None:
+            state["_not_forward_since"] = now
+        elif now - state["_not_forward_since"] >= DISTRACTED_THRESHOLD_SECONDS:
+            if _fire("Distracted"):
+                active.append("Distracted")
+    else:
+        state["_not_forward_since"] = None
+
+    # --- Disengaged: low engagement score -----------------------------------
+    if state["engagement_score"] < DISENGAGED_ENGAGEMENT_THRESHOLD:
+        if state["_low_engagement_since"] is None:
+            state["_low_engagement_since"] = now
+        elif now - state["_low_engagement_since"] >= DISENGAGED_THRESHOLD_SECONDS:
+            if _fire("Disengaged"):
+                active.append("Disengaged")
+    else:
+        state["_low_engagement_since"] = None
+
+    # --- Emotional Distress (legacy): sustained sad/angry emotion ----------
+    emotion_hist = state["emotion_history"]
     if emotion_hist:
         cutoff = now - DISTRESS_THRESHOLD_SECONDS
         recent = [(t, e) for t, e in emotion_hist if t >= cutoff]
@@ -328,27 +506,11 @@ def _check_alerts(name: str, now: float) -> Optional[str]:
             if span >= DISTRESS_THRESHOLD_SECONDS and all(
                 e in DISTRESS_EMOTIONS for _, e in recent
             ):
-                return "Emotional Distress"
+                if _fire("Emotional Distress"):
+                    active.append("Emotional Distress")
 
-    # -- Low Engagement ---------------------------------------------------
-    # Head consistently not facing forward for ENGAGEMENT_THRESHOLD_SECONDS
-    # AND emotion in the same window is consistently neutral.
-    if pose_hist:
-        cutoff = now - ENGAGEMENT_THRESHOLD_SECONDS
-        recent_poses = [(t, p) for t, p in pose_hist if t >= cutoff]
-        if recent_poses:
-            span = now - recent_poses[0][0]
-            if span >= ENGAGEMENT_THRESHOLD_SECONDS and all(
-                p in DISENGAGED_POSES for _, p in recent_poses
-            ):
-                # Also require sustained neutral emotion in the same window.
-                recent_emotions = [(t, e) for t, e in emotion_hist if t >= cutoff]
-                if recent_emotions and all(
-                    e in DISENGAGED_EMOTIONS for _, e in recent_emotions
-                ):
-                    return "Low Engagement"
-
-    return None
+    primary = active[0] if active else None
+    return active, primary
 
 
 # ---------------------------------------------------------------------------
@@ -377,12 +539,12 @@ async def _broadcast(payload: dict) -> None:
 
 async def _attendance_watchdog() -> None:
     """
-    Every 30 seconds, mark students as 'Away' if they have not been seen
+    Every 10 seconds, mark students as 'Away' if they have not been seen
     within the AWAY_THRESHOLD_SECONDS window.
     """
     loop = asyncio.get_event_loop()
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
         now = time.time()
         for name, state in student_states.items():
             if state["is_present"] and state["last_seen"] is not None:
@@ -390,17 +552,40 @@ async def _attendance_watchdog() -> None:
                     state["is_present"] = False
                     state["attendance_status"] = "Away"
                     await loop.run_in_executor(
-                        None, partial(_db_upsert_attendance, name, "Away", now)
+                        None,
+                        partial(
+                            _db_upsert_attendance,
+                            name, "Away", now, state["total_time_present"],
+                        ),
                     )
                     await _broadcast({
                         "student_name": name,
                         "emotion": state["emotion"],
                         "head_pose": state["head_pose"],
+                        "eye_state": state["eye_state"],
+                        "engagement_score": state["engagement_score"],
                         "timestamp": now,
                         "is_present": False,
                         "attendance_status": "Away",
                         "active_alert": state["active_alert"],
+                        "active_alerts": state["active_alerts"],
+                        "total_time_present": state["total_time_present"],
+                        "attendance_percentage": _attendance_percentage(name, now),
                     })
+
+
+# ---------------------------------------------------------------------------
+# Attendance percentage helper
+# ---------------------------------------------------------------------------
+
+
+def _attendance_percentage(name: str, now: float) -> float:
+    """Return 0–100 attendance percentage for *name* in the current session."""
+    session_duration = now - _session_start_time
+    if session_duration <= 0:
+        return 0.0
+    pct = student_states[name]["total_time_present"] / session_duration * 100.0
+    return round(min(100.0, pct), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +595,8 @@ async def _attendance_watchdog() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    global _session_start_time
+    _session_start_time = time.time()
     _init_db()
     load_encodings()
     asyncio.create_task(_attendance_watchdog())
@@ -560,7 +747,7 @@ async def update_student(update: StudentUpdate):
     """
     Receive a real-time update from the video processor for one student.
 
-    Updates attendance status, emotion/head-pose histories, evaluates alerts,
+    Updates attendance status, computes engagement score, evaluates alerts,
     and broadcasts the new state to all dashboard WebSocket clients.
     """
     name = update.student_name
@@ -573,41 +760,83 @@ async def update_student(update: StudentUpdate):
     state = student_states[name]
     was_present = state["is_present"]
 
+    # --- Update raw sensor readings ---------------------------------------
     state["emotion"] = update.emotion
     state["head_pose"] = update.head_pose
+    state["eye_state"] = update.eye_state
+
+    # --- Accumulate presence time ----------------------------------------
+    if was_present and state["last_seen"] is not None:
+        gap = min(now - state["last_seen"], MAX_UPDATE_GAP)
+        state["total_time_present"] += gap
+
     state["last_seen"] = now
     state["is_present"] = True
 
     if not was_present:
         state["attendance_status"] = "Present"
+        if state["first_seen"] is None:
+            state["first_seen"] = now
 
-    # Update histories ----------------------------------------------------
+    # --- Compute smoothed engagement score --------------------------------
+    state["engagement_score"] = _compute_engagement_score(
+        update.emotion,
+        update.head_pose,
+        update.eye_state,
+        state["engagement_score"],
+    )
+
+    # --- Update histories -------------------------------------------------
     _trim_history(state["emotion_history"], HISTORY_WINDOW_SECONDS, now)
     _trim_history(state["head_pose_history"], HISTORY_WINDOW_SECONDS, now)
     state["emotion_history"].append((now, update.emotion))
     state["head_pose_history"].append((now, update.head_pose))
 
-    # Evaluate alert conditions -------------------------------------------
-    state["active_alert"] = _check_alerts(name, now)
+    # --- Evaluate alert conditions ----------------------------------------
+    active_alerts, primary_alert = _evaluate_alerts(name, now)
+    state["active_alerts"] = active_alerts
+    state["active_alert"] = primary_alert
 
-    # Persist attendance to database (only when status changes to Present or
-    # periodically to keep last_seen fresh; we update every time is_present
-    # transitions or every 60 s by checking last DB write time).
+    # --- Compute attendance percentage ------------------------------------
+    att_pct = _attendance_percentage(name, now)
+
+    # --- Persist attendance to database -----------------------------------
     if not was_present:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, partial(_db_upsert_attendance, name, "Present", now)
+            None,
+            partial(
+                _db_upsert_attendance,
+                name, "Present", now, state["total_time_present"],
+            ),
         )
+        state["_last_db_write"] = now
+    elif now - state["_last_db_write"] >= DB_WRITE_INTERVAL_SECONDS:
+        # Periodically persist total_time_present while student remains present.
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            partial(
+                _db_upsert_attendance,
+                name, "Present", now, state["total_time_present"],
+            ),
+        )
+        state["_last_db_write"] = now
 
-    # Broadcast to dashboard ----------------------------------------------
+    # --- Broadcast to dashboard ------------------------------------------
     await _broadcast({
         "student_name": name,
         "emotion": update.emotion,
         "head_pose": update.head_pose,
+        "eye_state": update.eye_state,
+        "engagement_score": state["engagement_score"],
         "timestamp": now,
         "is_present": True,
         "attendance_status": state["attendance_status"],
-        "active_alert": state["active_alert"],
+        "active_alert": primary_alert,
+        "active_alerts": active_alerts,
+        "total_time_present": state["total_time_present"],
+        "attendance_percentage": att_pct,
     })
 
     return {"status": "ok"}
@@ -623,16 +852,23 @@ async def get_students(request: Request):
     """
     if not _is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required.")
+    now = time.time()
     result = []
     for name, state in student_states.items():
         result.append({
             "student_name": name,
             "emotion": state["emotion"],
             "head_pose": state["head_pose"],
+            "eye_state": state["eye_state"],
+            "engagement_score": state["engagement_score"],
             "attendance_status": state["attendance_status"],
             "is_present": state["is_present"],
             "active_alert": state["active_alert"],
+            "active_alerts": state["active_alerts"],
             "last_seen": state["last_seen"],
+            "first_seen": state["first_seen"],
+            "total_time_present": state["total_time_present"],
+            "attendance_percentage": _attendance_percentage(name, now),
         })
     return result
 
@@ -705,6 +941,145 @@ async def remove_all_students(request: Request):
     return {"message": "All students removed successfully."}
 
 
+@app.get("/export/attendance")
+async def export_attendance_csv(
+    request: Request,
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)"),
+):
+    """
+    Export attendance records as a CSV download.
+
+    The CSV includes: Student Name, Date, Status, First Seen, Last Seen,
+    Total Time Present (s), Attendance % (session).
+    """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    filter_date: Optional[date_cls] = None
+    if date:
+        try:
+            filter_date = date_cls.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date format \"{date}\". Use YYYY-MM-DD.")
+
+    loop = asyncio.get_event_loop()
+    records = await loop.run_in_executor(None, partial(_db_get_attendance, filter_date))
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Student Name", "Date", "Status",
+        "First Seen", "Last Seen",
+        "Total Time Present (s)", "Attendance % (session)",
+    ])
+    today = date_cls.today()
+    session_duration = time.time() - _session_start_time
+    for r in records:
+        # Attendance percentage is only meaningful for the current session.
+        # Historical records from other days are exported without a percentage
+        # because their session duration is unknown.
+        record_date = date_cls.fromisoformat(r["date"]) if r["date"] else None
+        if record_date == today and session_duration > 0 and r["total_time_present"]:
+            att_pct = f"{min(100.0, r['total_time_present'] / session_duration * 100):.1f}"
+        else:
+            att_pct = ""  # Not applicable for historical records
+        writer.writerow([
+            r["student_name"],
+            r["date"],
+            r["status"],
+            r["first_seen"] or "",
+            r["last_seen"] or "",
+            r["total_time_present"] or 0,
+            att_pct,
+        ])
+
+    output.seek(0)
+    filename = f"attendance_{(filter_date or date_cls.today()).isoformat()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/session/reset")
+async def reset_session(request: Request):
+    """
+    Reset the current monitoring session.
+
+    Clears all in-memory engagement scores, alert states, and presence-time
+    accumulators for every enrolled student.  The session start time is reset
+    to now so that attendance percentages are recalculated from this point.
+    Face encodings and database records are NOT affected.
+    """
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    global _session_start_time
+    _session_start_time = time.time()
+
+    for name in student_states:
+        state = student_states[name]
+        state["engagement_score"] = 60.0
+        state["total_time_present"] = 0.0
+        state["first_seen"] = None
+        state["is_present"] = False
+        state["attendance_status"] = "Absent"
+        state["last_seen"] = None
+        state["active_alerts"] = []
+        state["active_alert"] = None
+        state["alert_history"] = []
+        state["_last_alert_time"] = {}
+        state["_not_forward_since"] = None
+        state["_low_engagement_since"] = None
+        state["_eyes_closed_since"] = None
+        state["emotion_history"].clear()
+        state["head_pose_history"].clear()
+        state["_last_db_write"] = 0.0
+
+    await _broadcast({"event": "session_reset"})
+    return {"message": "Session reset successfully.", "session_start": _session_start_time}
+
+
+@app.get("/alerts")
+async def get_alerts(request: Request):
+    """Return all students that currently have active alerts."""
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    result = []
+    for name, state in student_states.items():
+        if state["active_alerts"]:
+            result.append({
+                "student_name": name,
+                "active_alerts": state["active_alerts"],
+                "alert_history": state["alert_history"][-20:],  # last 20 entries
+            })
+    return result
+
+
+@app.get("/engagement")
+async def get_engagement(request: Request):
+    """Return per-student engagement scores and the class average."""
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    now = time.time()
+    students_data = [
+        {
+            "student_name": name,
+            "engagement_score": state["engagement_score"],
+            "is_present": state["is_present"],
+            "attendance_percentage": _attendance_percentage(name, now),
+        }
+        for name, state in student_states.items()
+    ]
+    present = [s for s in students_data if s["is_present"]]
+    avg_engagement = (
+        round(sum(s["engagement_score"] for s in present) / len(present), 1)
+        if present else 0.0
+    )
+    return {"students": students_data, "class_average_engagement": avg_engagement}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
@@ -738,10 +1113,17 @@ async def dashboard_websocket(websocket: WebSocket):
                 "student_name": name,
                 "emotion": state["emotion"],
                 "head_pose": state["head_pose"],
+                "eye_state": state["eye_state"],
+                "engagement_score": state["engagement_score"],
                 "timestamp": now,
                 "is_present": state["is_present"],
                 "attendance_status": state["attendance_status"],
                 "active_alert": state["active_alert"],
+                "active_alerts": state["active_alerts"],
+                "last_seen": state["last_seen"],
+                "first_seen": state["first_seen"],
+                "total_time_present": state["total_time_present"],
+                "attendance_percentage": _attendance_percentage(name, now),
             }))
         except Exception:
             break
