@@ -85,7 +85,10 @@ MAX_UPDATE_GAP = 10.0
 # 20 seconds allows brief note-taking or thinking without triggering an alert.
 DISTRACTED_THRESHOLD_SECONDS = 20
 
-# 'Disengaged': engagement score below 40 for this many continuous seconds.
+# 'Disengaged': engagement score below this threshold for DISENGAGED_THRESHOLD_SECONDS.
+DISENGAGED_ENGAGEMENT_THRESHOLD = 40
+
+# 'Disengaged': engagement score below DISENGAGED_ENGAGEMENT_THRESHOLD for this many seconds.
 DISENGAGED_THRESHOLD_SECONDS = 15
 
 # 'Fatigue': eyes closed or drowsy for this many continuous seconds.
@@ -98,6 +101,9 @@ DISTRESS_THRESHOLD_SECONDS = 20 * 60   # 20 minutes
 
 # Minimum seconds between two firings of the same alert for a student.
 ALERT_COOLDOWN_SECONDS = 60
+
+# Interval (seconds) between periodic DB writes while a student stays present.
+DB_WRITE_INTERVAL_SECONDS = 30.0
 
 # Keep up to this much emotion/pose history per student.
 HISTORY_WINDOW_SECONDS = 25 * 60       # 25 minutes
@@ -481,7 +487,7 @@ def _evaluate_alerts(name: str, now: float) -> tuple[list[str], Optional[str]]:
         state["_not_forward_since"] = None
 
     # --- Disengaged: low engagement score -----------------------------------
-    if state["engagement_score"] < 40:
+    if state["engagement_score"] < DISENGAGED_ENGAGEMENT_THRESHOLD:
         if state["_low_engagement_since"] is None:
             state["_low_engagement_since"] = now
         elif now - state["_low_engagement_since"] >= DISENGAGED_THRESHOLD_SECONDS:
@@ -795,7 +801,6 @@ async def update_student(update: StudentUpdate):
     att_pct = _attendance_percentage(name, now)
 
     # --- Persist attendance to database -----------------------------------
-    _DB_WRITE_INTERVAL = 30.0  # seconds between periodic DB writes
     if not was_present:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
@@ -806,7 +811,7 @@ async def update_student(update: StudentUpdate):
             ),
         )
         state["_last_db_write"] = now
-    elif now - state["_last_db_write"] >= _DB_WRITE_INTERVAL:
+    elif now - state["_last_db_write"] >= DB_WRITE_INTERVAL_SECONDS:
         # Periodically persist total_time_present while student remains present.
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(

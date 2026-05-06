@@ -78,8 +78,9 @@ _FACE_3D_MODEL = np.array([
 # ---------------------------------------------------------------------------
 
 
-# Minimum eye width (pixels) below which EAR is considered unreliable.
-MIN_EYE_WIDTH = 1e-6
+# Guard value for EAR denominator: avoids division-by-zero when eye landmarks
+# are degenerate (near-zero horizontal extent).
+EPSILON_EYE_WIDTH = 1e-6
 
 
 def _eye_aspect_ratio(eye_landmarks: list) -> float:
@@ -99,7 +100,7 @@ def _eye_aspect_ratio(eye_landmarks: list) -> float:
     B = np.linalg.norm(p[2] - p[4])
     # Horizontal distance
     C = np.linalg.norm(p[0] - p[3])
-    if C < MIN_EYE_WIDTH:
+    if C < EPSILON_EYE_WIDTH:
         return 0.0
     return (A + B) / (2.0 * C)
 

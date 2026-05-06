@@ -928,6 +928,8 @@ const HEAD_POSE_LABEL = {
 const ENGAGE_HIGH = 60;   // >= ENGAGE_HIGH → good (green)
 const ENGAGE_MID  = 35;   // >= ENGAGE_MID  → warn (orange); < ENGAGE_MID → bad (red)
 // Default engagement score shown when no data has been received yet.
+// Must match the initial value of engagement_score in _init_student_state()
+// in classroom_backend.py (currently 60.0).
 const DEFAULT_ENGAGEMENT_SCORE = 60;
 
 /* ── State ─────────────────────────────────────────────────────────────── */
@@ -1498,7 +1500,7 @@ document.getElementById('btn-export-csv-modal').addEventListener('click', () => 
 
 /* ── Session Reset ─────────────────────────────────────────────────────── */
 document.getElementById('btn-session-reset').addEventListener('click', async () => {
-  if (!confirm('Reset session? This clears all engagement scores, presence timers, and alert states. Enrolled face encodings are not affected. Historical attendance records remain in the database, but the current-session time counters will restart from zero.')) return;
+  if (!confirm('Reset session? Clears engagement scores, presence timers, and alert states for all students. Face encodings are kept; historical DB records are preserved but session-time counters restart from zero.')) return;
   try {
     const res = await fetch('/session/reset', { method: 'POST' });
     if (res.status === 401) { window.location.href = '/login'; return; }
