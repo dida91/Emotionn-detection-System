@@ -3,6 +3,7 @@ Video processor for the real-time classroom monitoring system.
 
 Captures frames from a camera, detects and recognises student faces using
 the ``face_recognition`` library, estimates head pose with OpenCV's solvePnP,
+detects eye state (open / drowsy / closed) via Eye Aspect Ratio (EAR),
 runs emotion detection via the existing EmotionModel, and POST-s per-student
 updates to the classroom backend API.
 
@@ -49,6 +50,13 @@ ENCODINGS_RELOAD_INTERVAL = 5.0
 # A smaller value speeds up detection at some cost to accuracy for small faces.
 DETECTION_SCALE = 0.5
 
+# Eye Aspect Ratio thresholds.
+# EAR < EYES_CLOSED_THRESH  → closed
+# EAR < EYES_DROWSY_THRESH  → drowsy
+# EAR >= EYES_DROWSY_THRESH → open
+EYES_CLOSED_THRESH = 0.20
+EYES_DROWSY_THRESH = 0.25
+
 # ---------------------------------------------------------------------------
 # Standard 3-D face model used for head-pose estimation via solvePnP.
 # Coordinates are in an arbitrary metric unit; only ratios matter.
@@ -63,6 +71,57 @@ _FACE_3D_MODEL = np.array([
     (-150.0, -150.0, -125.0), # Left mouth corner
     (150.0,  -150.0, -125.0), # Right mouth corner
 ], dtype=np.float64)
+
+
+# ---------------------------------------------------------------------------
+# Eye state detection (Eye Aspect Ratio)
+# ---------------------------------------------------------------------------
+
+
+def _eye_aspect_ratio(eye_points: list) -> float:
+    """
+    Compute the Eye Aspect Ratio (EAR) for a single eye.
+
+    EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+
+    where p1..p6 are the 6 landmark points of the eye in order:
+    left-corner, top-left, top-right, right-corner, bottom-right, bottom-left.
+
+    A high EAR (~0.3+) means the eye is open; a low EAR means it is closed.
+    """
+    p = [np.array(pt, dtype=np.float64) for pt in eye_points]
+    # Vertical distances
+    A = np.linalg.norm(p[1] - p[5])
+    B = np.linalg.norm(p[2] - p[4])
+    # Horizontal distance
+    C = np.linalg.norm(p[0] - p[3])
+    if C < 1e-6:
+        return 0.0
+    return (A + B) / (2.0 * C)
+
+
+def _detect_eye_state(landmarks: dict) -> str:
+    """
+    Return the eye state based on the average Eye Aspect Ratio.
+
+    Returns
+    -------
+    str
+        ``"open"``, ``"drowsy"``, or ``"closed"``.
+    """
+    left_eye  = landmarks.get("left_eye", [])
+    right_eye = landmarks.get("right_eye", [])
+
+    if len(left_eye) < 6 or len(right_eye) < 6:
+        return "open"   # not enough landmarks; assume open
+
+    ear = (_eye_aspect_ratio(left_eye) + _eye_aspect_ratio(right_eye)) / 2.0
+
+    if ear < EYES_CLOSED_THRESH:
+        return "closed"
+    if ear < EYES_DROWSY_THRESH:
+        return "drowsy"
+    return "open"
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +314,9 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
 
                     head_pose = _estimate_head_pose(scaled_land, frame.shape)
 
+                    # Detect eye state from landmarks.
+                    eye_state = _detect_eye_state(scaled_land)
+
                     # Crop face for emotion detection.
                     top, right, bottom, left = [int(c / DETECTION_SCALE) for c in loc]
                     face_crop = frame[top:bottom, left:right]
@@ -267,7 +329,8 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
                         "loc": loc, 
                         "name": name, 
                         "emotion": emotion, 
-                        "head_pose": head_pose
+                        "head_pose": head_pose,
+                        "eye_state": eye_state,
                     })
 
                     # Rate-limit updates per student.
@@ -281,6 +344,7 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
                                     "student_name": name,
                                     "emotion": emotion,
                                     "head_pose": head_pose,
+                                    "eye_state": eye_state,
                                     "timestamp": now,
                                 },
                                 timeout=2.0,
@@ -304,10 +368,11 @@ def run(camera_index: int = 0, backend_url: str = DEFAULT_BACKEND_URL) -> None:
                     name = det["name"]
                     emotion = det["emotion"]
                     head_pose = det["head_pose"]
+                    eye_state = det.get("eye_state", "open")
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 220, 0), 2)
                     cv2.putText(
                         frame,
-                        f"{name}: {emotion} [{head_pose}]",
+                        f"{name}: {emotion} [{head_pose}] eyes:{eye_state}",
                         (left, max(20, top - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 2,
                     )

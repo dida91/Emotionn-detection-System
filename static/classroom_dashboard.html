@@ -673,6 +673,61 @@
       color: var(--text-muted);
       font-style: italic;
     }
+
+    /* ── Engagement Bar (per-student card) ───────────────────────────────── */
+    .engage-row {
+      padding-left: 8px;
+      margin-bottom: 8px;
+    }
+    .engage-row-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: .68rem;
+      color: var(--text-muted);
+      margin-bottom: 3px;
+    }
+    .engage-row-label span:last-child { font-weight: 700; color: var(--text); }
+    .engage-track {
+      height: 5px;
+      background: var(--surface2);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .engage-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--blue);
+      transition: width .6s ease;
+    }
+    .engage-fill.high  { background: var(--green); }
+    .engage-fill.mid   { background: var(--orange); }
+    .engage-fill.low   { background: var(--red); }
+
+    /* ── Eye state & extra info ──────────────────────────────────────────── */
+    .eye-state-label {
+      font-size: .70rem;
+      color: var(--text-muted);
+      padding-left: 8px;
+      margin-bottom: 6px;
+    }
+    .eye-state-label span { font-weight: 700; color: var(--text); }
+
+    /* Additional alert banner variants */
+    .alert-distracted-banner {
+      background: rgba(243,156,18,.18);
+      color: #f5a623;
+      border: 1px solid rgba(243,156,18,.35);
+    }
+    .alert-disengaged-banner {
+      background: rgba(212,172,13,.18);
+      color: #e8c93e;
+      border: 1px solid rgba(212,172,13,.32);
+    }
+    .alert-fatigue-banner {
+      background: rgba(155,89,182,.18);
+      color: #c39bd3;
+      border: 1px solid rgba(155,89,182,.35);
+    }
   </style>
 </head>
 <body>
@@ -694,6 +749,8 @@
 
   <div class="header-right">
     <button id="btn-attendance" class="btn-secondary" style="font-size:.8rem;padding:6px 12px;">📅 Attendance</button>
+    <button id="btn-export-csv" class="btn-secondary" style="font-size:.8rem;padding:6px 12px;" title="Download attendance CSV">⬇ Export CSV</button>
+    <button id="btn-session-reset" class="btn-secondary" style="font-size:.8rem;padding:6px 12px;border-color:var(--orange);color:var(--orange);" title="Reset session statistics">🔄 Reset Session</button>
     <div class="teacher-chip">👤 <strong id="teacher-name">…</strong></div>
     <button id="btn-logout">Sign Out</button>
   </div>
@@ -707,6 +764,7 @@
       <label for="attendance-date-select">Date:</label>
       <select id="attendance-date-select"><option value="">Today</option></select>
       <button id="btn-load-attendance">Load</button>
+      <button id="btn-export-csv-modal" class="btn-secondary" style="font-size:.8rem;padding:6px 12px;">⬇ Export CSV</button>
       <button id="btn-close-attendance">✕ Close</button>
     </div>
     <div id="attendance-table-wrap">
@@ -719,10 +777,11 @@
             <th>Status</th>
             <th>First Seen</th>
             <th>Last Seen</th>
+            <th>Time Present</th>
           </tr>
         </thead>
         <tbody id="attendance-tbody">
-          <tr><td colspan="6" id="attendance-empty">Loading…</td></tr>
+          <tr><td colspan="7" id="attendance-empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -921,22 +980,26 @@ function updateChart() {
 
 /* ── Summary & Stats ───────────────────────────────────────────────────── */
 function refreshSummary() {
-  let present = 0, away = 0, absent = 0, alerts = 0, engaged = 0, total = 0;
+  let present = 0, away = 0, absent = 0, alertCount = 0, engageSum = 0, total = 0;
   for (const s of Object.values(students)) {
     total++;
     if (s.attendance_status === 'Present')      { present++; }
     else if (s.attendance_status === 'Away')    { away++; }
     else                                         { absent++; }
-    if (s.active_alert)                          { alerts++; }
-    if (s.is_present && s.head_pose === 'forward' && s.emotion !== 'neutral') { engaged++; }
+    // Support both active_alerts (array) and legacy active_alert (string).
+    const hasAlert = (s.active_alerts && s.active_alerts.length > 0) || !!s.active_alert;
+    if (hasAlert) alertCount++;
+    if (s.is_present) {
+      engageSum += (typeof s.engagement_score === 'number' ? s.engagement_score : 60);
+    }
   }
-  const engagePct = present > 0 ? Math.round((engaged / present) * 100) : 0;
-  const attendPct = total   > 0 ? Math.round((present / total) * 100)   : 0;
+  const engagePct = present > 0 ? Math.round(engageSum / present) : 0;
+  const attendPct = total   > 0 ? Math.round((present / total) * 100) : 0;
 
   document.getElementById('count-present').textContent  = present;
   document.getElementById('count-away').textContent     = away;
   document.getElementById('count-absent').textContent   = absent;
-  document.getElementById('count-alert').textContent    = alerts;
+  document.getElementById('count-alert').textContent    = alertCount;
   document.getElementById('count-engaged').textContent  = engagePct + '%';
 
   document.getElementById('stat-total').textContent      = total;
@@ -945,17 +1008,21 @@ function refreshSummary() {
 
   const bar = document.getElementById('engage-bar');
   bar.style.width = engagePct + '%';
-  bar.className = 'progress-fill' + (engagePct >= 60 ? ' good' : engagePct >= 30 ? ' warn' : ' bad');
+  bar.className = 'progress-fill' + (engagePct >= 60 ? ' good' : engagePct >= 35 ? ' warn' : ' bad');
 
   // Alert strip
-  const alertStudents = Object.values(students).filter(s => s.active_alert);
+  const alertStudents = Object.values(students).filter(s =>
+    (s.active_alerts && s.active_alerts.length > 0) || !!s.active_alert
+  );
   const strip = document.getElementById('alert-strip');
   const pills = document.getElementById('alert-pills');
   if (alertStudents.length > 0) {
     strip.classList.add('visible');
-    pills.innerHTML = alertStudents.map(s =>
-      `<span class="alert-pill${s.active_alert === 'Low Engagement' ? ' engagement' : ''}">${s.student_name}</span>`
-    ).join('');
+    pills.innerHTML = alertStudents.map(s => {
+      const al = (s.active_alerts && s.active_alerts[0]) || s.active_alert || '';
+      const cls = (al === 'Low Engagement' || al === 'Disengaged') ? ' engagement' : '';
+      return `<span class="alert-pill${cls}">${escapeHtml(s.student_name)}: ${al}</span>`;
+    }).join('');
   } else {
     strip.classList.remove('visible');
   }
@@ -965,14 +1032,20 @@ function refreshSummary() {
   if (alertStudents.length === 0) {
     panel.innerHTML = '<p class="no-alerts">No active alerts ✅</p>';
   } else {
-    panel.innerHTML = alertStudents.map(s => `
-      <div class="alert-list-item ${s.active_alert === 'Emotional Distress' ? 'distress' : 'engagement'}">
-        <span>${s.active_alert === 'Emotional Distress' ? '🚨' : '⚠️'}</span>
-        <div>
-          <div class="a-name">${s.student_name}</div>
-          <div class="a-type">${s.active_alert}</div>
-        </div>
-      </div>`).join('');
+    panel.innerHTML = alertStudents.map(s => {
+      const alertList = s.active_alerts || (s.active_alert ? [s.active_alert] : []);
+      return alertList.map(al => {
+        const isDistress = (al === 'Emotional Distress' || al === 'Fatigue');
+        return `
+          <div class="alert-list-item ${isDistress ? 'distress' : 'engagement'}">
+            <span>${isDistress ? '🚨' : '⚠️'}</span>
+            <div>
+              <div class="a-name">${escapeHtml(s.student_name)}</div>
+              <div class="a-type">${al}</div>
+            </div>
+          </div>`;
+      }).join('');
+    }).join('');
   }
 
   updateChart();
@@ -993,7 +1066,8 @@ function applyFilter() {
     const card = document.getElementById(`card-${name}`);
     if (!card) continue;
     let show = true;
-    if (activeFilter === 'alert')   show = !!s.active_alert;
+    const hasAlert = (s.active_alerts && s.active_alerts.length > 0) || !!s.active_alert;
+    if (activeFilter === 'alert')   show = hasAlert;
     else if (activeFilter === 'present') show = s.attendance_status === 'Present';
     else if (activeFilter === 'away')    show = s.attendance_status === 'Away';
     else if (activeFilter === 'absent')  show = s.attendance_status === 'Absent';
@@ -1023,8 +1097,16 @@ function getOrCreateCard(name) {
         <span class="emotion-emoji">😐</span>
         <span class="emotion-label">neutral</span>
       </div>
+      <div class="engage-row">
+        <div class="engage-row-label"><span>Engagement</span><span class="engage-score">60%</span></div>
+        <div class="engage-track"><div class="engage-fill mid" style="width:60%"></div></div>
+      </div>
       <div class="head-pose-label">Pose: <span>—</span></div>
+      <div class="eye-state-label">Eyes: <span>—</span></div>
       <div class="alert-banner alert-distress-banner">🚨 Emotional Distress</div>
+      <div class="alert-banner alert-distracted-banner">👀 Distracted</div>
+      <div class="alert-banner alert-disengaged-banner">⚠️ Disengaged</div>
+      <div class="alert-banner alert-fatigue-banner">😴 Fatigue</div>
       <div class="alert-banner alert-engagement-banner">⚠️ Low Engagement</div>
       <div class="last-seen">Last seen: <span>—</span></div>
       <button class="btn-remove-student" title="Remove this student">🗑 Remove</button>
@@ -1048,11 +1130,17 @@ function updateCard(name, data, doFlash = false) {
   const status  = (data.attendance_status || 'Absent').toLowerCase();
   const emotion = (data.emotion || 'neutral').toLowerCase();
   const pose    = (data.head_pose || 'forward').toLowerCase();
-  const alert   = data.active_alert || null;
+  const eyeSt   = (data.eye_state || 'open').toLowerCase();
+  // Support both active_alerts (array) and legacy active_alert (string).
+  const alerts  = data.active_alerts || (data.active_alert ? [data.active_alert] : []);
+  const engage  = typeof data.engagement_score === 'number' ? data.engagement_score : 60;
 
   card.className = 'student-card';
-  if (alert === 'Emotional Distress')  card.classList.add('alert-distress');
-  else if (alert === 'Low Engagement') card.classList.add('alert-engagement');
+  if (alerts.includes('Emotional Distress'))       card.classList.add('alert-distress');
+  else if (alerts.includes('Fatigue'))             card.classList.add('alert-distress');
+  else if (alerts.includes('Distracted') ||
+           alerts.includes('Disengaged') ||
+           alerts.includes('Low Engagement'))      card.classList.add('alert-engagement');
   else card.classList.add(status === 'present' ? 'present' : status === 'away' ? 'away' : 'absent');
 
   if (doFlash) {
@@ -1066,13 +1154,29 @@ function updateCard(name, data, doFlash = false) {
   card.querySelector('.emotion-label').textContent = emotion;
   card.querySelector('.head-pose-label span').textContent = HEAD_POSE_LABEL[pose] || pose;
 
-  card.querySelector('.alert-distress-banner').classList.toggle('visible',   alert === 'Emotional Distress');
-  card.querySelector('.alert-engagement-banner').classList.toggle('visible', alert === 'Low Engagement');
+  // Eye state
+  const eyeLabels = { open: '👁 Open', drowsy: '😑 Drowsy', closed: '😴 Closed' };
+  card.querySelector('.eye-state-label span').textContent = eyeLabels[eyeSt] || eyeSt;
+
+  // Engagement bar
+  const engFill = card.querySelector('.engage-fill');
+  const engClass = engage >= 60 ? 'high' : engage >= 35 ? 'mid' : 'low';
+  engFill.style.width = engage + '%';
+  engFill.className = `engage-fill ${engClass}`;
+  card.querySelector('.engage-score').textContent = engage + '%';
+
+  // Alert banners
+  card.querySelector('.alert-distress-banner').classList.toggle('visible',   alerts.includes('Emotional Distress'));
+  card.querySelector('.alert-distracted-banner').classList.toggle('visible', alerts.includes('Distracted'));
+  card.querySelector('.alert-disengaged-banner').classList.toggle('visible', alerts.includes('Disengaged'));
+  card.querySelector('.alert-fatigue-banner').classList.toggle('visible',    alerts.includes('Fatigue'));
+  card.querySelector('.alert-engagement-banner').classList.toggle('visible', alerts.includes('Low Engagement'));
+
   card.querySelector('.last-seen span').textContent = fmtTime(data.last_seen || data.timestamp);
 
   // Apply current filter
   let show = true;
-  if (activeFilter === 'alert')        show = !!alert;
+  if (activeFilter === 'alert')        show = alerts.length > 0;
   else if (activeFilter === 'present') show = status === 'present';
   else if (activeFilter === 'away')    show = status === 'away';
   else if (activeFilter === 'absent')  show = status === 'absent';
@@ -1122,6 +1226,11 @@ function connectWS() {
     }
     if (data.event === 'removed_all') {
       removeAllCardsLocally();
+      return;
+    }
+    if (data.event === 'session_reset') {
+      // Re-fetch fresh state after a session reset.
+      fetchAndApply(false);
       return;
     }
     const name = data.student_name;
@@ -1215,6 +1324,7 @@ btnCapture.addEventListener('click', async () => {
       if (!students[name]) {
         students[name] = {
           student_name: name, emotion: 'neutral', head_pose: 'forward',
+          eye_state: 'open', engagement_score: 60, active_alerts: [],
           attendance_status: 'Absent', is_present: false, active_alert: null, last_seen: null,
         };
         updateCard(name, students[name]);
@@ -1294,6 +1404,16 @@ function fmtAttTime(isoStr) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function fmtDuration(secs) {
+  secs = Math.round(secs);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 async function loadAttendance(dateVal) {
   attendanceTbody.innerHTML = '<tr><td colspan="6" id="attendance-empty">Loading…</td></tr>';
   try {
@@ -1323,6 +1443,8 @@ async function loadAttendance(dateVal) {
       const statusClass = r.status === 'Present' ? 'att-status-present'
                         : r.status === 'Away'    ? 'att-status-away'
                         :                          'att-status-absent';
+      const secs = r.total_time_present || 0;
+      const timeStr = secs > 0 ? fmtDuration(secs) : '—';
       return `<tr>
         <td>${i + 1}</td>
         <td><strong>${escapeHtml(r.student_name)}</strong></td>
@@ -1330,6 +1452,7 @@ async function loadAttendance(dateVal) {
         <td class="${statusClass}">${r.status}</td>
         <td>${fmtAttTime(r.first_seen)}</td>
         <td>${fmtAttTime(r.last_seen)}</td>
+        <td>${timeStr}</td>
       </tr>`;
     }).join('');
   } catch (e) {
@@ -1352,6 +1475,38 @@ attendanceOverlay.addEventListener('click', e => {
 
 document.getElementById('btn-load-attendance').addEventListener('click', () => {
   loadAttendance(attendanceDateSel.value);
+});
+
+/* ── CSV Export ────────────────────────────────────────────────────────── */
+function exportCSV(dateVal) {
+  const url = `/export/attendance${dateVal ? `?date=${encodeURIComponent(dateVal)}` : ''}`;
+  window.location.href = url;
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', () => {
+  exportCSV('');
+});
+
+document.getElementById('btn-export-csv-modal').addEventListener('click', () => {
+  exportCSV(attendanceDateSel.value);
+});
+
+/* ── Session Reset ─────────────────────────────────────────────────────── */
+document.getElementById('btn-session-reset').addEventListener('click', async () => {
+  if (!confirm('Reset session? This clears all engagement scores, presence timers, and alert states. Enrolled faces and attendance DB records are not affected.')) return;
+  try {
+    const res = await fetch('/session/reset', { method: 'POST' });
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const json = await res.json();
+    if (res.ok) {
+      // Re-fetch fresh state after reset.
+      await fetchAndApply(false);
+    } else {
+      alert(json.detail || 'Reset failed.');
+    }
+  } catch (e) {
+    alert(`Network error: ${e.message}`);
+  }
 });
 
 /* ── Boot ──────────────────────────────────────────────────────────────── */
