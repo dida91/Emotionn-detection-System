@@ -71,7 +71,9 @@ ENCODINGS_FILE = "face_encodings.json"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Student marked 'Away' when not seen for this many seconds.
-AWAY_THRESHOLD_SECONDS = 5
+# 30 seconds provides a stable window that absorbs brief occlusions,
+# head-turns, and short network delays without too-frequent status changes.
+AWAY_THRESHOLD_SECONDS = 30
 
 # Maximum elapsed time (seconds) counted per update interval to avoid
 # crediting long gaps (e.g. video pauses) to total_time_present.
@@ -80,7 +82,8 @@ MAX_UPDATE_GAP = 10.0
 # --- Alert thresholds -------------------------------------------------------
 
 # 'Distracted': student not facing forward for this many continuous seconds.
-DISTRACTED_THRESHOLD_SECONDS = 10
+# 20 seconds allows brief note-taking or thinking without triggering an alert.
+DISTRACTED_THRESHOLD_SECONDS = 20
 
 # 'Disengaged': engagement score below 40 for this many continuous seconds.
 DISENGAGED_THRESHOLD_SECONDS = 15
@@ -206,8 +209,13 @@ def _init_db() -> None:
                 "ALTER TABLE classroom_attendance ADD COLUMN total_time_present REAL DEFAULT 0.0"
             ))
             conn.commit()
-    except OperationalError:
-        pass  # Column already exists — safe to ignore.
+    except OperationalError as exc:
+        # Most likely the column already exists (normal on subsequent startups).
+        # Log at debug level so developers can distinguish this from real errors.
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "Migration: total_time_present column may already exist (%s)", exc
+        )
     except Exception as exc:
         warnings.warn(
             f"DB migration warning (total_time_present): {exc}",
@@ -525,12 +533,12 @@ async def _broadcast(payload: dict) -> None:
 
 async def _attendance_watchdog() -> None:
     """
-    Every 5 seconds, mark students as 'Away' if they have not been seen
+    Every 10 seconds, mark students as 'Away' if they have not been seen
     within the AWAY_THRESHOLD_SECONDS window.
     """
     loop = asyncio.get_event_loop()
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
         now = time.time()
         for name, state in student_states.items():
             if state["is_present"] and state["last_seen"] is not None:
@@ -957,14 +965,19 @@ async def export_attendance_csv(
     writer.writerow([
         "Student Name", "Date", "Status",
         "First Seen", "Last Seen",
-        "Total Time Present (s)", "Attendance %",
+        "Total Time Present (s)", "Attendance % (session)",
     ])
-    now = time.time()
+    today = date_cls.today()
+    session_duration = time.time() - _session_start_time
     for r in records:
-        session_duration = now - _session_start_time
-        att_pct = ""
-        if session_duration > 0 and r["total_time_present"] is not None:
+        # Attendance percentage is only meaningful for the current session.
+        # Historical records from other days are exported without a percentage
+        # because their session duration is unknown.
+        record_date = date_cls.fromisoformat(r["date"]) if r["date"] else None
+        if record_date == today and session_duration > 0 and r["total_time_present"]:
             att_pct = f"{min(100.0, r['total_time_present'] / session_duration * 100):.1f}"
+        else:
+            att_pct = ""  # Not applicable for historical records
         writer.writerow([
             r["student_name"],
             r["date"],

@@ -927,6 +927,8 @@ const HEAD_POSE_LABEL = {
 // Engagement score thresholds (0–100) — must match backend DISENGAGED_THRESHOLD logic.
 const ENGAGE_HIGH = 60;   // >= ENGAGE_HIGH → good (green)
 const ENGAGE_MID  = 35;   // >= ENGAGE_MID  → warn (orange); < ENGAGE_MID → bad (red)
+// Default engagement score shown when no data has been received yet.
+const DEFAULT_ENGAGEMENT_SCORE = 60;
 
 /* ── State ─────────────────────────────────────────────────────────────── */
 const students = {};
@@ -993,7 +995,7 @@ function refreshSummary() {
     const hasAlert = (s.active_alerts && s.active_alerts.length > 0) || !!s.active_alert;
     if (hasAlert) alertCount++;
     if (s.is_present) {
-      engageSum += (typeof s.engagement_score === 'number' ? s.engagement_score : 60);
+      engageSum += (typeof s.engagement_score === 'number' ? s.engagement_score : DEFAULT_ENGAGEMENT_SCORE);
     }
   }
   const engagePct = present > 0 ? Math.round(engageSum / present) : 0;
@@ -1024,7 +1026,7 @@ function refreshSummary() {
     pills.innerHTML = alertStudents.map(s => {
       const al = (s.active_alerts && s.active_alerts[0]) || s.active_alert || '';
       const cls = (al === 'Low Engagement' || al === 'Disengaged') ? ' engagement' : '';
-      return `<span class="alert-pill${cls}">${escapeHtml(s.student_name)}: ${al}</span>`;
+      return `<span class="alert-pill${cls}">${escapeHtml(s.student_name)}: ${escapeHtml(al)}</span>`;
     }).join('');
   } else {
     strip.classList.remove('visible');
@@ -1044,7 +1046,7 @@ function refreshSummary() {
             <span>${isDistress ? '🚨' : '⚠️'}</span>
             <div>
               <div class="a-name">${escapeHtml(s.student_name)}</div>
-              <div class="a-type">${al}</div>
+              <div class="a-type">${escapeHtml(al)}</div>
             </div>
           </div>`;
       }).join('');
@@ -1136,7 +1138,7 @@ function updateCard(name, data, doFlash = false) {
   const eyeSt   = (data.eye_state || 'open').toLowerCase();
   // Support both active_alerts (array) and legacy active_alert (string).
   const alerts  = data.active_alerts || (data.active_alert ? [data.active_alert] : []);
-  const engage  = typeof data.engagement_score === 'number' ? data.engagement_score : 60;
+  const engage  = typeof data.engagement_score === 'number' ? data.engagement_score : DEFAULT_ENGAGEMENT_SCORE;
 
   card.className = 'student-card';
   if (alerts.includes('Emotional Distress'))       card.classList.add('alert-distress');
@@ -1327,7 +1329,7 @@ btnCapture.addEventListener('click', async () => {
       if (!students[name]) {
         students[name] = {
           student_name: name, emotion: 'neutral', head_pose: 'forward',
-          eye_state: 'open', engagement_score: 60, active_alerts: [],
+          eye_state: 'open', engagement_score: DEFAULT_ENGAGEMENT_SCORE, active_alerts: [],
           attendance_status: 'Absent', is_present: false, active_alert: null, last_seen: null,
         };
         updateCard(name, students[name]);
@@ -1496,7 +1498,7 @@ document.getElementById('btn-export-csv-modal').addEventListener('click', () => 
 
 /* ── Session Reset ─────────────────────────────────────────────────────── */
 document.getElementById('btn-session-reset').addEventListener('click', async () => {
-  if (!confirm('Reset session? This clears all engagement scores, presence timers, and alert states. Enrolled faces and attendance DB records are not affected.')) return;
+  if (!confirm('Reset session? This clears all engagement scores, presence timers, and alert states. Enrolled face encodings are not affected. Historical attendance records remain in the database, but the current-session time counters will restart from zero.')) return;
   try {
     const res = await fetch('/session/reset', { method: 'POST' });
     if (res.status === 401) { window.location.href = '/login'; return; }

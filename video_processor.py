@@ -78,7 +78,11 @@ _FACE_3D_MODEL = np.array([
 # ---------------------------------------------------------------------------
 
 
-def _eye_aspect_ratio(eye_points: list) -> float:
+# Minimum eye width (pixels) below which EAR is considered unreliable.
+MIN_EYE_WIDTH = 1e-6
+
+
+def _eye_aspect_ratio(eye_landmarks: list) -> float:
     """
     Compute the Eye Aspect Ratio (EAR) for a single eye.
 
@@ -89,13 +93,13 @@ def _eye_aspect_ratio(eye_points: list) -> float:
 
     A high EAR (~0.3+) means the eye is open; a low EAR means it is closed.
     """
-    p = [np.array(pt, dtype=np.float64) for pt in eye_points]
+    p = [np.array(pt, dtype=np.float64) for pt in eye_landmarks]
     # Vertical distances
     A = np.linalg.norm(p[1] - p[5])
     B = np.linalg.norm(p[2] - p[4])
     # Horizontal distance
     C = np.linalg.norm(p[0] - p[3])
-    if C < 1e-6:
+    if C < MIN_EYE_WIDTH:
         return 0.0
     return (A + B) / (2.0 * C)
 
@@ -115,7 +119,7 @@ def _detect_eye_state(landmarks: dict) -> str:
     if len(left_eye) < 6 or len(right_eye) < 6:
         return "open"   # not enough landmarks; assume open
 
-    ear = (_eye_aspect_ratio(left_eye) + _eye_aspect_ratio(right_eye)) / 2.0
+    ear = (_eye_aspect_ratio(left_eye) + _eye_aspect_ratio(right_eye)) / 2.0  # average both eyes
 
     if ear < EYES_CLOSED_THRESH:
         return "closed"
